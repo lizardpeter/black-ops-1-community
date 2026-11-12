@@ -10,6 +10,7 @@ set(overlay_units
     src/cgame_mp/cg_main_mp.cpp
     src/gfx_d3d/r_init.cpp
     src/win32/win_gamepad.cpp
+    src/win32/win_gamerprofile.cpp
     src/win32/win_input.cpp
 )
 

@@ -181,7 +181,15 @@
  void(__cdecl *s_removedCB)(int);
  void(__cdecl *s_insertedCB)(int);
  
-@@ -115,51 +112,12 @@
+@@ -108,58 +105,19 @@
+                                                 "thumbstick_default",
+                                                 1u,
+                                                 "Game pad stick configuration");
+-    gpad_enabled = _Dvar_RegisterBool("gpad_enabled", 0, 1u, "Game pad enabled");
++    gpad_enabled = _Dvar_RegisterBool("gpad_enabled", 0, 0x40u, "Game pad disabled in the enhanced edition");
+     gpad_present = _Dvar_RegisterBool("gpad_present", 0, 0x40u, "Game pad present");
+     for ( portIndex = 0; portIndex < 1; ++portIndex )
+     {
          gPad = &s_gamePads[portIndex];
          gPad->feedback.Rumble.wLeftMotorSpeed = 0;
          gPad->feedback.Rumble.wRightMotorSpeed = 0;
@@ -246,3 +254,14 @@
      gPad->keyboardEnabled = 0;
      if ( s_removedCB && wasEnabled && !gPad->enabled )
      {
+--- a/src/win32/win_gamerprofile.cpp
++++ b/src/win32/win_gamerprofile.cpp
+@@ -226,7 +226,7 @@
+         Dvar_SetInt((dvar_s *)com_first_time, gamerSettings[controllerIndex].firstTime);
+         Dvar_SetBool((dvar_s *)zombietron_discovered, gamerSettings[controllerIndex].zombietron_discovered);
+         Dvar_SetBool((dvar_s *)zombiefive_discovered, gamerSettings[controllerIndex].zombiefive_discovered);
+-        Dvar_SetBool((dvar_s *)gpad_enabled, gamerSettings[controllerIndex].gpadEnabled);
++        Dvar_SetBool((dvar_s *)gpad_enabled, false);
+         Dvar_SetBool((dvar_s *)input_invertPitch, gamerSettings[controllerIndex].invertPitch);
+         Dvar_SetFloat((dvar_s *)input_viewSensitivity, gamerSettings[controllerIndex].viewSensitivity);
+         Dvar_SetInt((dvar_s *)team_indicator, gamerSettings[controllerIndex].team_indicator);
