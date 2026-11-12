@@ -1,0 +1,301 @@
+--- a/src/database/db_load.cpp
++++ b/src/database/db_load.cpp
+@@ -1358,7 +1358,7 @@
+ template <typename T>
+ void LoadNativeNamedAsset(bool atStreamStart, T *&target, T *&current, XAssetType type,
+                           T *XAssetHeader::*member, void (__cdecl *load)(bool),
+-                          void (__cdecl *registerAsset)(XAssetHeader *))
++                          void (__cdecl *registerAsset)(XAssetHeader *), const char *T::*name = &T::name)
+ {
+     std::uint32_t encoded;
+     const unsigned char *sourceSlot = nullptr;
+@@ -1393,7 +1393,7 @@
+             T loaded{};
+             current = &loaded;
+             load(true);
+-            if (loaded.name)
++            if (loaded.*name)
+             {
+                 XAssetHeader asset(&loaded);
+                 registerAsset(&asset);
+@@ -5551,62 +5551,93 @@
+     }
+ }
+ 
++namespace
++{
++struct DiskPrimaryLight
++{
++    unsigned char fields[216];
++    std::uint32_t defName;
++};
++struct DiskBurnableCell
++{
++    std::int32_t x, y;
++    std::uint32_t samples;
++};
++struct DiskComWorld
++{
++    std::uint32_t name;
++    std::int32_t isInUse;
++    std::uint32_t primaryLightCount, primaryLights;
++    ComWaterHeader waterHeader;
++    std::uint32_t numWaterCells, waterCells;
++    ComBurnableHeader burnableHeader;
++    std::uint32_t numBurnableCells, burnableCells;
++};
++
++static_assert(sizeof(DiskPrimaryLight) == 220 && offsetof(ComPrimaryLight, defName) == 216);
++static_assert(sizeof(DiskBurnableCell) == 12 && sizeof(DiskComWorld) == 64);
++static_assert(sizeof(ComWaterCell) == 8 && sizeof(ComBurnableSample) == 1);
++
++ComPrimaryLight *LoadNativePrimaryLights(unsigned int count)
++{
++    const auto *records = ReadTableRecords<DiskPrimaryLight>(count);
++    if (!records)
++        return nullptr;
++    auto *lights = AllocateMaterialData<ComPrimaryLight>(count);
++    for (unsigned int i = 0; i < count; ++i)
++    {
++        const auto disk = MaterialRecordAt<DiskPrimaryLight>(records, i);
++        std::memcpy(static_cast<void *>(&lights[i]), disk.fields, sizeof(disk.fields));
++        lights[i].defName = disk.defName ? DB_ReadNativeAssetName(disk.defName) : nullptr;
++    }
++    return lights;
++}
++
++ComBurnableCell *LoadNativeBurnableCells(unsigned int count)
++{
++    const auto *records = ReadTableRecords<DiskBurnableCell>(count);
++    if (!records)
++        return nullptr;
++    auto *cells = AllocateMaterialData<ComBurnableCell>(count);
++    for (unsigned int i = 0; i < count; ++i)
++    {
++        const auto disk = MaterialRecordAt<DiskBurnableCell>(records, i);
++        cells[i].x = disk.x;
++        cells[i].y = disk.y;
++        if (disk.samples)
++            cells[i].data = reinterpret_cast<ComBurnableSample *>(ReadTableRecords<ComBurnableSample>(32, 0));
++    }
++    return cells;
++}
++}
++
+ void __cdecl Load_ComWorld(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varComWorld, 64);
+-    DB_PushStreamPos(4u);
+-    varXString = &varComWorld->name;
+-    Load_XString(0);
+-    if ( varComWorld->primaryLights )
+-    {
+-        varComWorld->primaryLights = (ComPrimaryLight *)AllocLoad_FxElemVisStateSample();
+-        varComPrimaryLight = varComWorld->primaryLights;
+-        Load_ComPrimaryLightArray(1, varComWorld->primaryLightCount);
+-    }
+-    if ( varComWorld->waterCells )
+-    {
+-        varComWorld->waterCells = (ComWaterCell *)AllocLoad_FxElemVisStateSample();
+-        varComWaterCell = varComWorld->waterCells;
+-        Load_ComWaterCellArray(1, varComWorld->numWaterCells);
+-    }
+-    if ( varComWorld->burnableCells )
+-    {
+-        varComWorld->burnableCells = (ComBurnableCell *)AllocLoad_FxElemVisStateSample();
+-        varComBurnableCell = varComWorld->burnableCells;
+-        Load_ComBurnableCellArray(1, varComWorld->numBurnableCells);
+-    }
++    DiskComWorld disk{};
++    if (!ReadTableHeader(atStreamStart, disk))
++        return;
++    auto &world = *varComWorld;
++    world.isInUse = disk.isInUse;
++    world.primaryLightCount = disk.primaryLightCount;
++    world.waterHeader = disk.waterHeader;
++    world.numWaterCells = disk.numWaterCells;
++    world.burnableHeader = disk.burnableHeader;
++    world.numBurnableCells = disk.numBurnableCells;
++    DB_PushStreamPos(4);
++    world.name = DB_ReadNativeAssetName(disk.name);
++    if (disk.primaryLights && disk.primaryLightCount)
++        world.primaryLights = LoadNativePrimaryLights(disk.primaryLightCount);
++    if (disk.waterCells && disk.numWaterCells)
++        world.waterCells = reinterpret_cast<ComWaterCell *>(ReadTableRecords<ComWaterCell>(disk.numWaterCells));
++    if (disk.burnableCells && disk.numBurnableCells)
++        world.burnableCells = LoadNativeBurnableCells(disk.numBurnableCells);
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_ComWorldPtr(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varComWorldPtr, 4);
+-    DB_PushStreamPos(0);
+-    if ( *varComWorldPtr )
+-    {
+-        value = (unsigned int)*varComWorldPtr;
+-        if ( *varComWorldPtr == (ComWorld *)-1 || value == -2 )
+-        {
+-            *varComWorldPtr = (ComWorld *)AllocLoad_FxElemVisStateSample();
+-            varComWorld = *varComWorldPtr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_ComWorld(1);
+-            Load_ComWorldAsset((XAssetHeader *)varComWorldPtr);
+-            if ( inserted )
+-                *inserted = *varComWorldPtr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varComWorldPtr);
+-        }
+-    }
+-    DB_PopStreamPos();
++    LoadNativeNamedAsset(atStreamStart, *varComWorldPtr, varComWorld, ASSET_TYPE_COMWORLD,
++                         &XAssetHeader::comWorld, Load_ComWorld, Load_ComWorldAsset);
+ }
+ 
+ void __cdecl Mark_ComWorldPtr()
+@@ -9471,59 +9502,40 @@
+ 
+ void __cdecl Load_Font(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varFont, sizeof(Font_s));
+-    DB_PushStreamPos(4u);
+-    varXString = &varFont->fontName;
+-    Load_XString(0);
+-    varMaterialHandle = &varFont->material;
+-    Load_MaterialHandle(0);
+-    varMaterialHandle = &varFont->glowMaterial;
+-    Load_MaterialHandle(0);
+-    if ( varFont->glyphs )
+-    {
+-        if ( varFont->glyphs == (Glyph *)-1 )
+-        {
+-            varFont->glyphs = (Glyph *)AllocLoad_FxElemVisStateSample();
+-            varGlyph = varFont->glyphs;
+-            Load_GlyphArray(1, varFont->glyphCount);
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToPointer((unsigned int *)&varFont->glyphs);
+-        }
+-    }
++    struct DiskFont
++    {
++        std::uint32_t name;
++        std::int32_t pixelHeight, glyphCount;
++        std::uint32_t material, glowMaterial, glyphs;
++    };
++    static_assert(sizeof(DiskFont) == 24 && sizeof(Glyph) == 24);
++    DiskFont disk{};
++    if (!ReadTableHeader(atStreamStart, disk))
++        return;
++    if (disk.glyphCount < 0 || (disk.glyphCount && !disk.glyphs))
++    {
++        Com_Error(ERR_DROP, "Invalid fastfile font glyph count");
++        return;
++    }
++    auto &font = *varFont;
++    font.pixelHeight = disk.pixelHeight;
++    font.glyphCount = disk.glyphCount;
++    DB_PushStreamPos(4);
++    font.fontName = DB_ReadNativeAssetName(disk.name);
++    font.material = reinterpret_cast<Material *>(static_cast<std::uintptr_t>(disk.material));
++    font.glowMaterial = reinterpret_cast<Material *>(static_cast<std::uintptr_t>(disk.glowMaterial));
++    varMaterialHandle = &font.material;
++    Load_MaterialHandle(false);
++    varMaterialHandle = &font.glowMaterial;
++    Load_MaterialHandle(false);
++    font.glyphs = ReadMaterialData<Glyph>(disk.glyphs, disk.glyphCount, 3);
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_FontHandle(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varFontHandle, 4);
+-    DB_PushStreamPos(0);
+-    if ( *varFontHandle )
+-    {
+-        value = (unsigned int)*varFontHandle;
+-        if ( *varFontHandle == (Font_s *)-1 || value == -2 )
+-        {
+-            *varFontHandle = (Font_s *)AllocLoad_FxElemVisStateSample();
+-            varFont = *varFontHandle;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_Font(1);
+-            Load_FontAsset((XAssetHeader *)varFontHandle);
+-            if ( inserted )
+-                *inserted = *varFontHandle;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varFontHandle);
+-        }
+-    }
+-    DB_PopStreamPos();
++    LoadNativeNamedAsset(atStreamStart, *varFontHandle, varFont, ASSET_TYPE_FONT,
++                         &XAssetHeader::font, Load_Font, Load_FontAsset, &Font_s::fontName);
+ }
+ 
+ void __cdecl Mark_Font()
+--- a/src/database/db_file_load.cpp
++++ b/src/database/db_file_load.cpp
+@@ -635,7 +635,8 @@
+             asset.type == ASSET_TYPE_MATERIAL || asset.type == ASSET_TYPE_PACK_INDEX ||
+             asset.type == ASSET_TYPE_LOCALIZE_ENTRY || asset.type == ASSET_TYPE_STRINGTABLE ||
+             asset.type == ASSET_TYPE_LIGHT_DEF || asset.type == ASSET_TYPE_PHYSPRESET ||
+-            asset.type == ASSET_TYPE_MAP_ENTS || asset.type == ASSET_TYPE_XGLOBALS)
++            asset.type == ASSET_TYPE_MAP_ENTS || asset.type == ASSET_TYPE_XGLOBALS ||
++            asset.type == ASSET_TYPE_COMWORLD || asset.type == ASSET_TYPE_FONT)
+             DB_RecordNativeAssetAlias(serialized + sizeof(disk) * i + offsetof(FastfileAsset, header),
+                                      asset.type, asset.header.data);
+         if (g_load.abort)
+--- a/src/gfx_d3d/r_font.h
++++ b/src/gfx_d3d/r_font.h
+@@ -25,7 +25,6 @@
+     struct Material *glowMaterial;
+     Glyph *glyphs;
+ };
+-static_assert(sizeof(Font_s) == 24);
+ 
+ const Glyph *__cdecl R_GetCharacterGlyph(Font_s *font, unsigned int letter);
+ unsigned int __cdecl R_FontGetRandomLetter(Font_s *font, int seed);
+--- a/src/database/db_assetnames.cpp
++++ b/src/database/db_assetnames.cpp
+@@ -184,7 +184,6 @@
+     return 24;
+ }
+ 
+-static_assert(sizeof(Font_s) == 24);
+ int __cdecl DB_SizeofXAsset_Font_s_()
+ {
+     return 24;
+@@ -235,7 +234,6 @@
+     return 332;
+ }
+ 
+-static_assert(sizeof(ComWorld) == 64);
+ int __cdecl DB_SizeofXAsset_ComWorld_()
+ {
+     return 64;
+@@ -452,6 +450,8 @@
+     // These x64 loaders hand native objects to the registry for cloning.
+     switch (type)
+     {
++    case ASSET_TYPE_COMWORLD: return sizeof(ComWorld);
++    case ASSET_TYPE_FONT: return sizeof(Font_s);
+     case ASSET_TYPE_RAWFILE: return sizeof(RawFile);
+     case ASSET_TYPE_PHYSPRESET: return sizeof(PhysPreset);
+     case ASSET_TYPE_MATERIAL: return sizeof(Material);
