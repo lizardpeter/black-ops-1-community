@@ -1,0 +1,412 @@
+--- a/src/database/db_memory.h
++++ b/src/database/db_memory.h
+@@ -1,4 +1,5 @@
+ #pragma once
++#include <cstddef>
+ 
+ struct XBlock;
+ 
+@@ -15,3 +16,5 @@
+                 const char *filename,
+                 int flags);
+ void __cdecl DB_FreeXBlocks(XBlock *blocks, int flags);
++
++void *DB_AllocateNativeZoneData(const XBlock *blocks, std::size_t bytes);
+--- a/src/database/db_memory.cpp
++++ b/src/database/db_memory.cpp
+@@ -4,6 +4,25 @@
+ #include <universal/physicalmemory.h>
+ #include <universal/com_memory.h>
+ #include <qcommon/common.h>
++#include <memory>
++#include <mutex>
++#include <unordered_map>
++#include <vector>
++
++namespace
++{
++std::mutex nativeZoneMutex;
++std::unordered_map<const unsigned char *, std::vector<std::unique_ptr<std::byte[]>>> nativeZoneData;
++}
++
++void *DB_AllocateNativeZoneData(const XBlock *blocks, std::size_t bytes)
++{
++    auto storage = std::make_unique<std::byte[]>(bytes);
++    auto *result = storage.get();
++    std::lock_guard lock(nativeZoneMutex);
++    nativeZoneData[blocks[4].data].push_back(std::move(storage));
++    return result;
++}
+ 
+ const char *g_block_mem_name[7] =
+ {
+@@ -90,6 +109,10 @@
+ 
+ void __cdecl DB_FreeXBlocks(XBlock *blocks, int flags)
+ {
++    {
++        std::lock_guard lock(nativeZoneMutex);
++        nativeZoneData.erase(blocks[4].data);
++    }
+     unsigned int blockIndex; // [esp+0h] [ebp-4h]
+ 
+     for ( blockIndex = 0; blockIndex < 7; ++blockIndex )
+--- a/src/gfx_d3d/r_material.h
++++ b/src/gfx_d3d/r_material.h
+@@ -232,7 +232,6 @@
+         unsigned __int16 techsetFlags;
+         MaterialTechnique *techniques[130];
+ };
+-static_assert(sizeof(MaterialTechniqueSet) == 528);
+ 
+ struct __declspec(align(4)) GfxImageLoadDef // sizeof=0x10
+ {
+--- a/src/database/db_load.cpp
++++ b/src/database/db_load.cpp
+@@ -33,6 +33,8 @@
+ #include <enhanced/port/x64/fastfile_reference.h>
+ #include <qcommon/common.h>
+ #include <cstring>
++#include "db_memory.h"
++#include <new>
+ #include <qcommon/cm_load_obj.h>
+ #include <game/g_bsp.h>
+ #include <qcommon/cm_staticmodel.h>
+@@ -2547,46 +2549,295 @@
+     }
+ }
+ 
++namespace
++{
++constexpr auto vertexDeclAliasType = static_cast<XAssetType>(-2);
++constexpr auto vertexShaderAliasType = static_cast<XAssetType>(-3);
++constexpr auto pixelShaderAliasType = static_cast<XAssetType>(-4);
++constexpr auto techniqueAliasType = static_cast<XAssetType>(-5);
++
++struct DiskTechnique
++{
++    std::uint32_t name;
++    std::uint16_t flags, passCount;
++};
++
++struct DiskPass
++{
++    std::uint32_t declaration, vertex, pixel;
++    std::uint8_t perPrim, perObject, stable, samplerFlags;
++    std::uint32_t arguments;
++};
++
++struct DiskShader
++{
++    std::uint32_t name, runtimeShader, program;
++    std::uint16_t programSize;
++};
++
++struct DiskArgument
++{
++    std::uint16_t type, dest;
++    std::uint32_t value;
++};
++
++struct DiskDeclaration
++{
++    std::uint8_t streamCount, hasOptionalSource, isLoaded, padding;
++    MaterialStreamRouting routes[16];
++    std::uint32_t runtimeDeclarations[18];
++};
++
++struct DiskTechniqueSet
++{
++    std::uint32_t name;
++    std::uint8_t worldVertFormat, unused;
++    std::uint16_t flags;
++    std::uint32_t techniques[130];
++};
++
++static_assert(sizeof(DiskTechnique) == 8 && sizeof(DiskPass) == 20);
++static_assert(sizeof(DiskShader) == 16 && sizeof(DiskArgument) == 8);
++static_assert(sizeof(DiskDeclaration) == 108 && sizeof(DiskTechniqueSet) == 528);
++
++template <typename T>
++const unsigned char *ReadMaterialRecords(unsigned int count)
++{
++    const auto size = static_cast<int>(sizeof(T) * count);
++    auto *data = DB_GetNativeStreamSpan(3, size);
++    if (data && size)
++        Load_Stream(true, data, size);
++    return data;
++}
++
++template <typename T>
++T MaterialRecordAt(const unsigned char *data, unsigned int index = 0)
++{
++    T record{};
++    std::memcpy(&record, data + sizeof(T) * index, sizeof(T));
++    return record;
++}
++
++template <typename T>
++T *AllocateMaterialData(unsigned int count = 1, std::size_t extra = 0)
++{
++    static_assert(alignof(T) <= alignof(std::max_align_t));
++    auto *data = DB_AllocateNativeZoneData(g_streamBlocks, sizeof(T) * count + extra);
++    return new (data) T[count]{};
++}
++
++template <typename T, typename Load>
++T *LoadMaterialReference(std::uint32_t encoded, XAssetType type, Load load)
++{
++    const auto reference = bo1::DecodeFastfileReference(encoded);
++    if (reference.kind == bo1::ReferenceKind::absent)
++        return nullptr;
++    if (reference.kind != bo1::ReferenceKind::inlineData)
++        return static_cast<T *>(DB_FindNativeAssetAlias(encoded, type));
++    const auto *slot = DB_GetNativeStreamSpan(3, 1);
++    if (!slot)
++        return nullptr;
++    auto *asset = load();
++    if (asset)
++        DB_RecordNativeAssetAlias(slot, type, asset);
++    return asset;
++}
++
++MaterialVertexDeclaration *LoadNativeVertexDeclaration()
++{
++    const auto *bytes = ReadMaterialRecords<DiskDeclaration>(1);
++    if (!bytes)
++        return nullptr;
++    const auto record = MaterialRecordAt<DiskDeclaration>(bytes);
++    if (record.streamCount > 16)
++    {
++        Com_Error(ERR_DROP, "Invalid material vertex stream count");
++        return nullptr;
++    }
++    auto *declaration = AllocateMaterialData<MaterialVertexDeclaration>();
++    declaration->streamCount = record.streamCount;
++    declaration->hasOptionalSource = record.hasOptionalSource != 0;
++    std::memcpy(declaration->routing.data, record.routes, sizeof(record.routes));
++    Load_BuildVertexDecl(&declaration);
++    return declaration;
++}
++
++template <typename T, typename Create>
++T *LoadNativeMaterialShader(Create create)
++{
++    const auto *bytes = ReadMaterialRecords<DiskShader>(1);
++    if (!bytes)
++        return nullptr;
++    const auto record = MaterialRecordAt<DiskShader>(bytes);
++    auto *shader = AllocateMaterialData<T>();
++    shader->name = DB_ReadNativeAssetName(record.name);
++    if (record.program && record.programSize)
++    {
++        const auto *program = ReadMaterialRecords<DWORD>(record.programSize);
++        if (program)
++        {
++            shader->prog.loadDef.program = reinterpret_cast<DWORD *>(const_cast<unsigned char *>(program));
++            shader->prog.loadDef.programSize = record.programSize;
++            create(&shader->prog.loadDef, shader);
++        }
++    }
++    return shader;
++}
++
++const float *LoadMaterialLiteral(std::uint32_t encoded)
++{
++    const auto reference = bo1::DecodeFastfileReference(encoded);
++    if (reference.kind == bo1::ReferenceKind::absent)
++        return nullptr;
++    if (reference.kind == bo1::ReferenceKind::inlineData)
++        return reinterpret_cast<const float *>(ReadMaterialRecords<float>(4));
++    if (reference.kind == bo1::ReferenceKind::blockOffset)
++    {
++        const auto &block = g_streamBlocks[reference.block];
++        if (block.data && reference.offset % alignof(float) == 0 &&
++            reference.offset <= block.size && sizeof(float) * 4 <= block.size - reference.offset)
++            return reinterpret_cast<const float *>(block.data + reference.offset);
++    }
++    Com_Error(ERR_DROP, "Invalid material literal reference");
++    return nullptr;
++}
++
++MaterialShaderArgument *LoadNativeMaterialArguments(unsigned int count)
++{
++    if (!count)
++        return nullptr;
++    const auto *records = ReadMaterialRecords<DiskArgument>(count);
++    if (!records)
++        return nullptr;
++    auto *args = AllocateMaterialData<MaterialShaderArgument>(count);
++    for (unsigned int i = 0; i < count; ++i)
++    {
++        const auto record = MaterialRecordAt<DiskArgument>(records, i);
++        auto &arg = args[i];
++        arg.type = record.type;
++        arg.dest = record.dest;
++        if (record.type == 1 || record.type == 7)
++            arg.u.literalConst = LoadMaterialLiteral(record.value);
++        else if (record.type == 3 || record.type == 5)
++            std::memcpy(&arg.u.codeConst, &record.value, sizeof(record.value));
++        else
++            arg.u.codeSampler = record.value;
++    }
++    return args;
++}
++
++MaterialTechnique *LoadNativeTechnique()
++{
++    const auto *bytes = ReadMaterialRecords<DiskTechnique>(1);
++    if (!bytes)
++        return nullptr;
++    const auto record = MaterialRecordAt<DiskTechnique>(bytes);
++    const auto *passes = ReadMaterialRecords<DiskPass>(record.passCount);
++    if (!passes)
++        return nullptr;
++    const auto extra = record.passCount > 1 ? (record.passCount - 1) * sizeof(MaterialPass) : 0;
++    auto *technique = AllocateMaterialData<MaterialTechnique>(1, extra);
++    technique->flags = record.flags;
++    technique->passCount = record.passCount;
++    for (unsigned int i = 0; i < record.passCount; ++i)
++    {
++        const auto disk = MaterialRecordAt<DiskPass>(passes, i);
++        auto *passStorage = reinterpret_cast<unsigned char *>(technique) +
++            offsetof(MaterialTechnique, passArray) + i * sizeof(MaterialPass);
++        auto &pass = *new (passStorage) MaterialPass{};
++        pass.vertexDecl = LoadMaterialReference<MaterialVertexDeclaration>(
++            disk.declaration, vertexDeclAliasType, LoadNativeVertexDeclaration);
++        pass.vertexShader = LoadMaterialReference<MaterialVertexShader>(
++            disk.vertex, vertexShaderAliasType, [] {
++                return LoadNativeMaterialShader<MaterialVertexShader>(Load_CreateMaterialVertexShader);
++            });
++        pass.pixelShader = LoadMaterialReference<MaterialPixelShader>(
++            disk.pixel, pixelShaderAliasType, [] {
++                return LoadNativeMaterialShader<MaterialPixelShader>(Load_CreateMaterialPixelShader);
++            });
++        pass.perPrimArgCount = disk.perPrim;
++        pass.perObjArgCount = disk.perObject;
++        pass.stableArgCount = disk.stable;
++        pass.customSamplerFlags = disk.samplerFlags;
++        if (disk.arguments)
++            pass.args = LoadNativeMaterialArguments(disk.perPrim + disk.perObject + disk.stable);
++    }
++    technique->name = DB_ReadNativeAssetName(record.name);
++    BO1_CaptureMaterialShaders(*technique);
++    return technique;
++}
++}
++
+ void __cdecl Load_MaterialTechniqueSet(bool atStreamStart)
+ {
+-    static_assert(sizeof(MaterialTechniqueSet) == 528);
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varMaterialTechniqueSet, sizeof(MaterialTechniqueSet));
+-    DB_PushStreamPos(4u);
+-    varXString = &varMaterialTechniqueSet->name;
+-    Load_XString(0);
+-    varMaterialTechniquePtr = varMaterialTechniqueSet->techniques;
+-    Load_MaterialTechniquePtrArray(0, 130);
++    if (!atStreamStart)
++    {
++        Com_Error(ERR_DROP, "Material technique set must be read from the fastfile stream");
++        return;
++    }
++    const auto *bytes = ReadMaterialRecords<DiskTechniqueSet>(1);
++    if (!bytes)
++        return;
++    const auto record = MaterialRecordAt<DiskTechniqueSet>(bytes);
++    auto &set = *varMaterialTechniqueSet;
++    set.worldVertFormat = record.worldVertFormat;
++    set.unused[0] = record.unused;
++    set.techsetFlags = record.flags;
++    DB_PushStreamPos(4);
++    set.name = DB_ReadNativeAssetName(record.name);
++    for (unsigned int i = 0; i < 130; ++i)
++        set.techniques[i] = LoadMaterialReference<MaterialTechnique>(
++            record.techniques[i], techniqueAliasType, LoadNativeTechnique);
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_MaterialTechniqueSetPtr(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varMaterialTechniqueSetPtr, 4);
++    const unsigned char *sourceSlot = nullptr;
++    std::uint32_t encoded;
++    if (atStreamStart)
++    {
++        sourceSlot = ReadMaterialRecords<std::uint32_t>(1);
++        if (!sourceSlot)
++            return;
++        encoded = MaterialRecordAt<std::uint32_t>(sourceSlot);
++    }
++    else
++    {
++        encoded = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(*varMaterialTechniqueSetPtr));
++    }
++
+     DB_PushStreamPos(0);
+-    if ( *varMaterialTechniqueSetPtr )
+-    {
+-        value = (unsigned int)*varMaterialTechniqueSetPtr;
+-        if ( *varMaterialTechniqueSetPtr == (MaterialTechniqueSet *)-1 || value == -2 )
+-        {
+-            *varMaterialTechniqueSetPtr = (MaterialTechniqueSet *)AllocLoad_FxElemVisStateSample();
++    *varMaterialTechniqueSetPtr = nullptr;
++    const auto reference = bo1::DecodeFastfileReference(encoded);
++    if (reference.kind == bo1::ReferenceKind::inlineData ||
++        reference.kind == bo1::ReferenceKind::inlineWithFixup)
++    {
++        const auto *fixup = reference.kind == bo1::ReferenceKind::inlineWithFixup ?
++            ReserveImageFixup() : nullptr;
++        if (reference.kind != bo1::ReferenceKind::inlineWithFixup || fixup)
++        {
++            MaterialTechniqueSet loaded{};
++            varMaterialTechniqueSet = &loaded;
++            Load_MaterialTechniqueSet(true);
++            if (loaded.name)
++            {
++                XAssetHeader asset(&loaded);
++                Load_MaterialTechniqueSetAsset(&asset);
++                *varMaterialTechniqueSetPtr = asset.techniqueSet;
++                if (fixup)
++                    DB_RecordNativeAssetAlias(fixup, ASSET_TYPE_TECHNIQUE_SET, asset.techniqueSet);
++            }
+             varMaterialTechniqueSet = *varMaterialTechniqueSetPtr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_MaterialTechniqueSet(1);
+-            Load_MaterialTechniqueSetAsset((XAssetHeader *)varMaterialTechniqueSetPtr);
+-            if ( inserted )
+-                *inserted = *varMaterialTechniqueSetPtr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varMaterialTechniqueSetPtr);
+-        }
+-    }
++        }
++    }
++    else if (reference.kind != bo1::ReferenceKind::absent)
++    {
++        *varMaterialTechniqueSetPtr = static_cast<MaterialTechniqueSet *>(
++            DB_FindNativeAssetAlias(encoded, ASSET_TYPE_TECHNIQUE_SET));
++    }
++    if (sourceSlot)
++        DB_RecordNativeAssetAlias(sourceSlot, ASSET_TYPE_TECHNIQUE_SET, *varMaterialTechniqueSetPtr);
+     DB_PopStreamPos();
+ }
+ 
+--- a/src/database/db_file_load.cpp
++++ b/src/database/db_file_load.cpp
+@@ -631,7 +631,7 @@
+         varXAsset = &asset;
+         Load_XAsset(false);
+         if (asset.type == ASSET_TYPE_RAWFILE || asset.type == ASSET_TYPE_SNDDRIVER_GLOBALS ||
+-            asset.type == ASSET_TYPE_IMAGE)
++            asset.type == ASSET_TYPE_IMAGE || asset.type == ASSET_TYPE_TECHNIQUE_SET)
+             DB_RecordNativeAssetAlias(serialized + sizeof(disk) * i + offsetof(FastfileAsset, header),
+                                      asset.type, asset.header.data);
+         if (g_load.abort)
