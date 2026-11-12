@@ -117,6 +117,7 @@ def asset_dispatch(root):
             handlers[int(value)] = handler
     native = {
         "Load_GfxImagePtr",
+        "Load_MaterialHandle",
         "Load_MaterialTechniqueSetPtr",
         "Load_RawFilePtr",
         "Load_SndDriverGlobalsPtr",

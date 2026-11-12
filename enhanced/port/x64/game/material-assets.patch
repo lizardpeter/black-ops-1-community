@@ -1,0 +1,326 @@
+--- a/src/gfx_d3d/r_material.h
++++ b/src/gfx_d3d/r_material.h
+@@ -393,7 +393,6 @@
+         };
+         GfxStateBits *stateBitsTable;
+ };
+-static_assert(sizeof(Material) == 192);
+ 
+ 
+ struct stream_source_info_t // sizeof=0x3
+--- a/src/database/db_load.cpp
++++ b/src/database/db_load.cpp
+@@ -2841,84 +2841,232 @@
+     DB_PopStreamPos();
+ }
+ 
++namespace
++{
++constexpr auto materialTexturesAliasType = static_cast<XAssetType>(-6);
++constexpr auto materialWaterAliasType = static_cast<XAssetType>(-7);
++
++struct DiskMaterial
++{
++    std::uint32_t name, gameFlags;
++    std::uint8_t pad, sortKey, atlasRows, atlasColumns;
++    std::uint64_t drawSurf;
++    std::uint32_t surfaceTypeBits, layeredSurfaceTypes;
++    std::uint16_t hashIndex;
++    std::uint8_t infoPadding[6];
++    std::uint8_t stateBitsEntry[130];
++    std::uint8_t textureCount, constantCount, stateBitsCount, stateFlags, cameraRegion, maxStreamedMips;
++    std::uint32_t techniqueSet, textureTable, constantTable, stateBitsTable;
++};
++
++struct DiskMaterialTexture
++{
++    std::uint32_t nameHash;
++    char nameStart, nameEnd;
++    std::uint8_t samplerState, semantic, isMatureContent, pad[3];
++    std::uint32_t data;
++};
++
++struct DiskMaterialWater
++{
++    float time;
++    std::uint32_t h0, wTerm;
++    std::int32_t m, n;
++    float lx, ly, gravity, windVelocity, windDirection[2], amplitude, codeConstant[4];
++    std::uint32_t image;
++};
++
++static_assert(sizeof(DiskMaterial) == 192 && offsetof(DiskMaterial, stateBitsEntry) == 40);
++static_assert(offsetof(DiskMaterial, techniqueSet) == 176);
++static_assert(sizeof(DiskMaterialTexture) == 16 && sizeof(DiskMaterialWater) == 68);
++static_assert(sizeof(MaterialConstantDef) == 32 && sizeof(GfxStateBits) == 8);
++static_assert(sizeof(complex_s) == 8);
++
++template <typename T>
++T *ReadMaterialData(std::uint32_t encoded, unsigned int count, int alignment)
++{
++    const auto reference = bo1::DecodeFastfileReference(encoded);
++    if (reference.kind == bo1::ReferenceKind::absent)
++        return nullptr;
++    if (count > INT32_MAX / sizeof(T))
++    {
++        Com_Error(ERR_DROP, "Invalid material array size");
++        return nullptr;
++    }
++    const auto size = static_cast<int>(sizeof(T) * count);
++    if (reference.kind == bo1::ReferenceKind::inlineData)
++    {
++        auto *data = DB_GetNativeStreamSpan(alignment, size);
++        if (data && size)
++            Load_Stream(true, data, size);
++        return reinterpret_cast<T *>(data);
++    }
++    if (reference.kind == bo1::ReferenceKind::blockOffset)
++    {
++        const auto &block = g_streamBlocks[reference.block];
++        if (block.data && reference.offset <= block.size &&
++            (reinterpret_cast<std::uintptr_t>(block.data + reference.offset) & alignment) == 0 &&
++            static_cast<unsigned int>(size) <= block.size - reference.offset)
++            return reinterpret_cast<T *>(block.data + reference.offset);
++    }
++    Com_Error(ERR_DROP, "Invalid material array reference");
++    return nullptr;
++}
++
++water_t *LoadNativeMaterialWater()
++{
++    const auto *bytes = ReadMaterialRecords<DiskMaterialWater>(1);
++    if (!bytes)
++        return nullptr;
++    const auto disk = MaterialRecordAt<DiskMaterialWater>(bytes);
++    const auto elements = static_cast<std::int64_t>(disk.m) * disk.n;
++    if (disk.m < 4 || disk.n < 4 || elements > INT32_MAX / static_cast<int>(sizeof(complex_s)))
++    {
++        Com_Error(ERR_DROP, "Invalid water material dimensions");
++        return nullptr;
++    }
++    auto *water = AllocateMaterialData<water_t>();
++    water->writable.floatTime = disk.time;
++    water->M = disk.m;
++    water->N = disk.n;
++    water->Lx = disk.lx;
++    water->Ly = disk.ly;
++    water->gravity = disk.gravity;
++    water->windvel = disk.windVelocity;
++    std::memcpy(water->winddir, disk.windDirection, sizeof(disk.windDirection));
++    water->amplitude = disk.amplitude;
++    std::memcpy(water->codeConstant, disk.codeConstant, sizeof(disk.codeConstant));
++    const auto count = static_cast<unsigned int>(elements);
++    water->H0 = ReadMaterialData<complex_s>(disk.h0 ? UINT32_MAX : 0, count, 3);
++    water->wTerm = ReadMaterialData<float>(disk.wTerm ? UINT32_MAX : 0, count, 3);
++    water->image = reinterpret_cast<GfxImage *>(static_cast<std::uintptr_t>(disk.image));
++    varGfxImagePtr = &water->image;
++    Load_GfxImagePtr(false);
++    Load_PicmipWater(&water);
++    return water;
++}
++
++MaterialTextureDef *LoadNativeMaterialTextures(unsigned int count)
++{
++    const auto *bytes = ReadMaterialRecords<DiskMaterialTexture>(count);
++    if (!bytes)
++        return nullptr;
++    auto *textures = AllocateMaterialData<MaterialTextureDef>(count);
++    for (unsigned int i = 0; i < count; ++i)
++    {
++        const auto disk = MaterialRecordAt<DiskMaterialTexture>(bytes, i);
++        auto &texture = textures[i];
++        texture.nameHash = disk.nameHash;
++        texture.nameStart = disk.nameStart;
++        texture.nameEnd = disk.nameEnd;
++        texture.samplerState = disk.samplerState;
++        texture.semantic = disk.semantic;
++        texture.isMatureContent = disk.isMatureContent;
++        if (disk.semantic == 11)
++        {
++            texture.u.water = LoadMaterialReference<water_t>(
++                disk.data, materialWaterAliasType, LoadNativeMaterialWater);
++        }
++        else
++        {
++            texture.u.image = reinterpret_cast<GfxImage *>(static_cast<std::uintptr_t>(disk.data));
++            varGfxImagePtr = &texture.u.image;
++            Load_GfxImagePtr(false);
++        }
++    }
++    return textures;
++}
++}
++
+ void __cdecl Load_Material(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varMaterial, sizeof(Material));
+-    DB_PushStreamPos(4u);
+-    varMaterialInfo = &varMaterial->info;
+-    Load_MaterialInfo(0);
+-    varMaterialTechniqueSetPtr = &varMaterial->localTechniqueSet;
+-    Load_MaterialTechniqueSetPtr(0);
+-    if ( varMaterial->textureTable )
+-    {
+-        if ( varMaterial->textureTable == (MaterialTextureDef *)-1 )
+-        {
+-            varMaterial->textureTable = (MaterialTextureDef *)AllocLoad_FxElemVisStateSample();
+-            varMaterialTextureDef = varMaterial->textureTable;
+-            Load_MaterialTextureDefArray(1, varMaterial->textureCount);
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToPointer((unsigned int *)&varMaterial->textureTable);
+-        }
+-    }
+-    if ( varMaterial->localConstantTable )
+-    {
+-        if ( varMaterial->localConstantTable == (MaterialConstantDef *)-1 )
+-        {
+-            varMaterial->localConstantTable = (MaterialConstantDef *)AllocLoad_GfxPackedVertex0();
+-            varMaterialConstantDef = varMaterial->localConstantTable;
+-            Load_MaterialConstantDefArray(1, varMaterial->constantCount);
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToPointer((unsigned int *)&varMaterial->localConstantTable);
+-        }
+-    }
+-    if ( varMaterial->stateBitsTable )
+-    {
+-        if ( varMaterial->stateBitsTable == (GfxStateBits *)-1 )
+-        {
+-            varMaterial->stateBitsTable = (GfxStateBits *)AllocLoad_FxElemVisStateSample();
+-            varGfxStateBits = varMaterial->stateBitsTable;
+-            Load_GfxStateBitsArray(1, varMaterial->stateBitsCount);
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToPointer((unsigned int *)&varMaterial->stateBitsTable);
+-        }
+-    }
++    if (!atStreamStart)
++    {
++        Com_Error(ERR_DROP, "Material header must be read from the fastfile stream");
++        return;
++    }
++    auto *header = DB_GetNativeStreamSpan(3, sizeof(DiskMaterial));
++    if (!header)
++        return;
++    Load_Stream(true, header, sizeof(DiskMaterial));
++    const auto disk = MaterialRecordAt<DiskMaterial>(header);
++    auto &material = *varMaterial;
++    DB_PushStreamPos(4);
++    material.info.name = DB_ReadNativeAssetName(disk.name);
++    material.info.gameFlags = disk.gameFlags;
++    material.info.pad = disk.pad;
++    material.info.sortKey = disk.sortKey;
++    material.info.textureAtlasRowCount = disk.atlasRows;
++    material.info.textureAtlasColumnCount = disk.atlasColumns;
++    material.info.drawSurf.packed = disk.drawSurf;
++    material.info.surfaceTypeBits = disk.surfaceTypeBits;
++    material.info.layeredSurfaceTypes = disk.layeredSurfaceTypes;
++    material.info.hashIndex = disk.hashIndex;
++    std::memcpy(material.stateBitsEntry, disk.stateBitsEntry, sizeof(disk.stateBitsEntry));
++    material.textureCount = disk.textureCount;
++    material.constantCount = disk.constantCount;
++    material.stateBitsCount = disk.stateBitsCount;
++    material.stateFlags = disk.stateFlags;
++    material.cameraRegion = disk.cameraRegion;
++    material.maxStreamedMips = disk.maxStreamedMips;
++    material.localTechniqueSet = reinterpret_cast<MaterialTechniqueSet *>(
++        static_cast<std::uintptr_t>(disk.techniqueSet));
++    varMaterialTechniqueSetPtr = &material.localTechniqueSet;
++    Load_MaterialTechniqueSetPtr(false);
++    material.textureTable = LoadMaterialReference<MaterialTextureDef>(
++        disk.textureTable, materialTexturesAliasType,
++        [&] { return LoadNativeMaterialTextures(disk.textureCount); });
++    material.localConstantTable = ReadMaterialData<MaterialConstantDef>(
++        disk.constantTable, disk.constantCount, 15);
++    material.stateBitsTable = ReadMaterialData<GfxStateBits>(
++        disk.stateBitsTable, disk.stateBitsCount, 3);
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_MaterialHandle(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varMaterialHandle, 4);
++    const unsigned char *sourceSlot = nullptr;
++    std::uint32_t encoded;
++    if (atStreamStart)
++    {
++        sourceSlot = ReadMaterialRecords<std::uint32_t>(1);
++        if (!sourceSlot)
++            return;
++        encoded = MaterialRecordAt<std::uint32_t>(sourceSlot);
++    }
++    else
++    {
++        encoded = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(*varMaterialHandle));
++    }
+     DB_PushStreamPos(0);
+-    if ( *varMaterialHandle )
+-    {
+-        value = (unsigned int)*varMaterialHandle;
+-        if ( *varMaterialHandle == (Material *)-1 || value == -2 )
+-        {
+-            *varMaterialHandle = (Material *)AllocLoad_FxElemVisStateSample();
++    *varMaterialHandle = nullptr;
++    const auto reference = bo1::DecodeFastfileReference(encoded);
++    if (reference.kind == bo1::ReferenceKind::inlineData ||
++        reference.kind == bo1::ReferenceKind::inlineWithFixup)
++    {
++        const auto *fixup = reference.kind == bo1::ReferenceKind::inlineWithFixup ?
++            ReserveImageFixup() : nullptr;
++        if (reference.kind != bo1::ReferenceKind::inlineWithFixup || fixup)
++        {
++            Material loaded{};
++            varMaterial = &loaded;
++            Load_Material(true);
++            if (loaded.info.name)
++            {
++                *varMaterialHandle = &loaded;
++                Load_MaterialAsset(varMaterialHandle);
++                if (fixup)
++                    DB_RecordNativeAssetAlias(fixup, ASSET_TYPE_MATERIAL, *varMaterialHandle);
++            }
+             varMaterial = *varMaterialHandle;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_Material(1);
+-            Load_MaterialAsset(varMaterialHandle);
+-            if ( inserted )
+-                *inserted = *varMaterialHandle;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varMaterialHandle);
+-        }
+-    }
++        }
++    }
++    else if (reference.kind != bo1::ReferenceKind::absent)
++    {
++        *varMaterialHandle = static_cast<Material *>(DB_FindNativeAssetAlias(encoded, ASSET_TYPE_MATERIAL));
++    }
++    if (sourceSlot)
++        DB_RecordNativeAssetAlias(sourceSlot, ASSET_TYPE_MATERIAL, *varMaterialHandle);
+     DB_PopStreamPos();
+ }
+ 
+--- a/src/database/db_file_load.cpp
++++ b/src/database/db_file_load.cpp
+@@ -631,7 +631,8 @@
+         varXAsset = &asset;
+         Load_XAsset(false);
+         if (asset.type == ASSET_TYPE_RAWFILE || asset.type == ASSET_TYPE_SNDDRIVER_GLOBALS ||
+-            asset.type == ASSET_TYPE_IMAGE || asset.type == ASSET_TYPE_TECHNIQUE_SET)
++            asset.type == ASSET_TYPE_IMAGE || asset.type == ASSET_TYPE_TECHNIQUE_SET ||
++            asset.type == ASSET_TYPE_MATERIAL)
+             DB_RecordNativeAssetAlias(serialized + sizeof(disk) * i + offsetof(FastfileAsset, header),
+                                      asset.type, asset.header.data);
+         if (g_load.abort)
