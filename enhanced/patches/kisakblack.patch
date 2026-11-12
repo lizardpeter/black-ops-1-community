@@ -655,7 +655,7 @@
 @@ -4689,6 +4693,27 @@
      }
  }
-
+ 
 +std::atomic<bool> bo1CapturePending{false};
 +
 +static bool BO1_CaptureBackBuffer(IDirect3DSwapChain9 *swapChain)
@@ -698,5 +698,5 @@
 +                Com_Printf(14, "BO1_LAUNCH_CHECK: captured and presented multiplayer frame\n");
 +        }
      }
-
+ 
      FrameMark; // backend thread Frame marker
