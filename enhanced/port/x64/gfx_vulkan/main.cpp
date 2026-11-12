@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace
 {
@@ -433,10 +434,13 @@ int main(int argc, char **argv)
 {
     try
     {
-        if (argc > 2)
-            throw std::runtime_error("Usage: bo1_vulkan_probe [path-to-image.iwi]");
+        if (argc > 3)
+            throw std::runtime_error("Usage: bo1_vulkan_probe [path-to-image.iwi [shader-prefix]]");
+        bo1::PreviewShaders shaders;
+        if (argc == 3)
+            shaders = bo1::ReadPreviewShaders(argv[2]);
         bo1::IwiImage source{};
-        if (argc == 2)
+        if (argc >= 2)
         {
             std::ifstream file(argv[1], std::ios::binary);
             if (!file)
@@ -448,10 +452,10 @@ int main(int argc, char **argv)
 
         const Window window;
         Vulkan vk;
-        vk.Initialize(window, argc == 2 && source.format != bo1::IwiFormat::bgra8);
+        vk.Initialize(window, argc >= 2 && source.format != bo1::IwiFormat::bgra8);
         bo1::VulkanImage texture(vk.device);
-        if (argc == 2)
-            texture.Upload(vk.physical, vk.pool, vk.queue, source);
+        if (argc >= 2)
+            texture.Upload(vk.physical, vk.pool, vk.queue, source, std::move(shaders));
         Swapchain swapchain(vk, texture);
         VkExtent2D previous{};
         for (;;)

@@ -37,3 +37,13 @@ cmake --build build/shader-translate --config Release --target bo1_shader_transl
 The tool links the shader stages and writes `menu.vert.spv` and `menu.frag.spv`. It currently assumes float vertex inputs. Porting a material also requires its vertex declaration, descriptor bindings, constants, textures, and render state. The synthetic Shader Model 3 test passed SPIR-V validation. Retail material coverage has yet to be measured.
 
 The enhanced D3D9 build can export shader pairs directly from fastfiles while loading material techniques. Set `$env:BO1_CAPTURE_SHADERS = '1'` before launching it with your local game assets. Each numbered entry in the working directory's `bo1-shader-capture` folder has a `.vs.bin`, a `.ps.bin`, and a text file naming the technique, pass, shaders, and stream routes. Pass the two binary files for the same entry to the translator. The capture hook is opt-in and hasn't been run against a retail install in this environment.
+
+## Preview a translated pair
+
+For a simple position/UV shader pair with one pixel texture, supply the translator's output prefix after the IWI path.
+
+```powershell
+.\build\vulkan-x64\Release\bo1_vulkan_probe.exe C:\path\to\image.iwi menu
+```
+
+This mode supplies position and UV float4 inputs at locations 0 and 1 and the IWI sampler at set 2, binding 0. It checks the shader interface and rejects additional descriptors or push constants. The built-in shaders remain available by omitting the prefix. Materials with additional textures, uniforms, packed inputs, or other vertex layouts require engine bindings before they can be previewed.

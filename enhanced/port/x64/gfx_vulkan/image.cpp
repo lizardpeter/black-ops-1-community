@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <utility>
 #include <stdexcept>
 #include <string>
 
@@ -90,14 +91,19 @@ VulkanImage::~VulkanImage()
     vkDestroyPipelineLayout(device, layout, nullptr);
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(device, descriptorLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device, emptyLayout, nullptr);
+    vkDestroyBuffer(device, vertices, nullptr);
+    vkFreeMemory(device, vertexMemory, nullptr);
     vkDestroySampler(device, sampler, nullptr);
     vkDestroyImageView(device, view, nullptr);
     vkDestroyImage(device, image, nullptr);
     vkFreeMemory(device, memory, nullptr);
 }
 
-void VulkanImage::Upload(VkPhysicalDevice physical, VkCommandPool pool, VkQueue queue, const IwiImage &source)
+void VulkanImage::Upload(VkPhysicalDevice physical, VkCommandPool pool, VkQueue queue, const IwiImage &source,
+                         PreviewShaders sourceShaders)
 {
+    shaders = std::move(sourceShaders);
     const auto format = Format(source.format);
     VkFormatProperties properties{};
     vkGetPhysicalDeviceFormatProperties(physical, format, &properties);
@@ -213,13 +219,43 @@ void VulkanImage::Upload(VkPhysicalDevice physical, VkCommandPool pool, VkQueue 
     VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layoutInfo.setLayoutCount = 1;
     layoutInfo.pSetLayouts = &descriptorLayout;
+    std::array<VkDescriptorSetLayout, 3> translatedLayouts{};
+    if (!shaders.vertex.empty())
+    {
+        VkDescriptorSetLayoutCreateInfo empty{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        Check(vkCreateDescriptorSetLayout(device, &empty, nullptr, &emptyLayout), "Create empty shader layout");
+        translatedLayouts = {emptyLayout, emptyLayout, descriptorLayout};
+        layoutInfo.setLayoutCount = static_cast<uint32_t>(translatedLayouts.size());
+        layoutInfo.pSetLayouts = translatedLayouts.data();
+
+        constexpr float triangle[][8] = {
+            {-1, -1, 0, 1, 0, 0, 0, 1},
+            { 3, -1, 0, 1, 2, 0, 0, 1},
+            {-1,  3, 0, 1, 0, 2, 0, 1},
+        };
+        VkBufferCreateInfo buffer{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        buffer.size = sizeof(triangle);
+        buffer.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        Check(vkCreateBuffer(device, &buffer, nullptr, &vertices), "Create preview vertex buffer");
+        vkGetBufferMemoryRequirements(device, vertices, &requirements);
+        vertexMemory = Allocate(physical, device, requirements,
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        Check(vkBindBufferMemory(device, vertices, vertexMemory, 0), "Bind preview vertex buffer");
+        void *vertexData = nullptr;
+        Check(vkMapMemory(device, vertexMemory, 0, buffer.size, 0, &vertexData), "Map preview vertex buffer");
+        std::memcpy(vertexData, triangle, sizeof(triangle));
+        vkUnmapMemory(device, vertexMemory);
+    }
     Check(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &layout), "Create image pipeline layout");
 }
 
 VkPipeline VulkanImage::CreatePipeline(VkFormat outputFormat) const
 {
-    const ShaderModule vertex(device, image_vert, sizeof(image_vert));
-    const ShaderModule fragment(device, image_frag, sizeof(image_frag));
+    const bool translated = !shaders.vertex.empty();
+    const ShaderModule vertex(device, translated ? shaders.vertex.data() : image_vert,
+                              translated ? shaders.vertex.size() * sizeof(uint32_t) : sizeof(image_vert));
+    const ShaderModule fragment(device, translated ? shaders.fragment.data() : image_frag,
+                                translated ? shaders.fragment.size() * sizeof(uint32_t) : sizeof(image_frag));
     std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
     stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
                  VK_SHADER_STAGE_VERTEX_BIT, vertex.module, "main", nullptr};
@@ -227,6 +263,18 @@ VkPipeline VulkanImage::CreatePipeline(VkFormat outputFormat) const
                  VK_SHADER_STAGE_FRAGMENT_BIT, fragment.module, "main", nullptr};
 
     VkPipelineVertexInputStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    const VkVertexInputBindingDescription binding{0, 8 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
+    const std::array<VkVertexInputAttributeDescription, 2> attributes{{
+        {0, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 0},
+        {1, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 4 * sizeof(float)},
+    }};
+    if (translated)
+    {
+        input.vertexBindingDescriptionCount = 1;
+        input.pVertexBindingDescriptions = &binding;
+        input.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributes.size());
+        input.pVertexAttributeDescriptions = attributes.data();
+    }
     VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
@@ -277,7 +325,13 @@ void VulkanImage::Draw(VkCommandBuffer command, VkPipeline pipeline, VkExtent2D 
     vkCmdSetViewport(command, 0, 1, &viewport);
     vkCmdSetScissor(command, 0, 1, &scissor);
     vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &descriptor, 0, nullptr);
+    if (vertices)
+    {
+        const VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(command, 0, 1, &vertices, &offset);
+    }
+    vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, vertices ? 2 : 0,
+                            1, &descriptor, 0, nullptr);
     vkCmdDraw(command, 3, 1, 0, 0);
 }
 }
