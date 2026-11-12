@@ -23,3 +23,15 @@ Pass a loose PC BO1 IWI v13 file extracted from your installation. The probe sup
 ```
 
 With no image argument, the probe clears the swapchain. With an image, it uploads through a staging buffer and draws with a sampled-image descriptor and dynamic rendering. This exercises the image and shader pipeline. BO1's menu layout, actual material shaders, and retail asset parity remain to be integrated.
+
+## Translate a D3D9 shader pair
+
+Build the separate offline tool with CMake 3.28 or newer and Git. It uses a pinned, statically linked MojoShader SPIR-V backend. Supply matching vertex and pixel DWORD streams from a BO1 material pass. The input files contain the shader tokens only, with no asset or fastfile header.
+
+```powershell
+cmake -S enhanced/port/x64/shader_translate -B build/shader-translate
+cmake --build build/shader-translate --config Release --target bo1_shader_translate
+.\build\shader-translate\Release\bo1_shader_translate.exe vertex.bin pixel.bin menu
+```
+
+The tool links the shader stages and writes `menu.vert.spv` and `menu.frag.spv`. It currently assumes float vertex inputs. Porting a material also requires its vertex declaration, descriptor bindings, constants, textures, and render state. The synthetic Shader Model 3 test passed SPIR-V validation. Retail material coverage has yet to be measured.
