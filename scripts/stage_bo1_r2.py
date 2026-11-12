@@ -60,32 +60,38 @@ def main():
     with ExitStack() as cleanup:
         available = shutil.disk_usage(args.destination).free
         archive = None
+        failures = []
+        key = quote(BO1_ZIP_KEY, safe="/")
         if available >= EXPECTED_SIZE + 8 * 1024**3:
             zip_path = args.destination.parent / "bo1-retail.zip"
             cleanup.callback(zip_path.unlink, missing_ok=True)
-            print(f"Downloading the {EXPECTED_SIZE:,}-byte R2 archive in one stream.", flush=True)
-            try:
-                size, _, _ = download(R2_BASES[0] + BO1_ZIP_KEY, zip_path, EXPECTED_SIZE)
-                if size != EXPECTED_SIZE:
-                    raise RuntimeError(f"R2 archive size mismatch: received {size:,} bytes")
-                archive = cleanup.enter_context(zipfile.ZipFile(zip_path))
-                print("R2 transfer complete. Reading the local ZIP directory.", flush=True)
-            except (OSError, RuntimeError, zipfile.BadZipFile) as error:
-                print(f"Bulk R2 transfer failed: {error}", flush=True)
-                zip_path.unlink(missing_ok=True)
+            for base in R2_BASES:
+                print(f"Downloading the {EXPECTED_SIZE:,}-byte archive from {base}", flush=True)
+                try:
+                    size, _, _ = download(base + key, zip_path, EXPECTED_SIZE)
+                    if size != EXPECTED_SIZE:
+                        raise RuntimeError(f"R2 archive size mismatch: received {size:,} bytes")
+                    archive = cleanup.enter_context(zipfile.ZipFile(zip_path))
+                    print("R2 transfer complete. Reading the local ZIP directory.", flush=True)
+                    break
+                except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as error:
+                    failures.append(f"bulk {base}: {error}")
+                    print(failures[-1], flush=True)
+                    zip_path.unlink(missing_ok=True)
+        else:
+            failures.append(f"bulk staging skipped with {available:,} bytes free")
 
         if archive is None:
             print("Using bounded R2 byte ranges.", flush=True)
-            failures = []
             for base in R2_BASES:
                 try:
                     source = cleanup.enter_context(
-                        RetryingRangeObject(base + quote(BO1_ZIP_KEY, safe="/"), EXPECTED_SIZE)
+                        RetryingRangeObject(base + key, EXPECTED_SIZE)
                     )
                     archive = cleanup.enter_context(zipfile.ZipFile(source))
                     break
                 except (OSError, RuntimeError, zipfile.BadZipFile) as error:
-                    failures.append(f"{base}: {error}")
+                    failures.append(f"range {base}: {error}")
             if archive is None:
                 raise RuntimeError("Cannot open the BO1 archive: " + "; ".join(failures))
 
