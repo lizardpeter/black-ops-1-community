@@ -14,3 +14,7 @@ if(WIN32)
     target_compile_features(bo1_wasapi_probe PRIVATE cxx_std_17)
     target_link_libraries(bo1_wasapi_probe PRIVATE ole32)
 endif()
+
+add_executable(bo1_iwi_x64_test iwi.cpp iwi_test.cpp)
+target_compile_features(bo1_iwi_x64_test PRIVATE cxx_std_17)
+add_test(NAME bo1_iwi_x64 COMMAND bo1_iwi_x64_test)
