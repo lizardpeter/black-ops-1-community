@@ -6,6 +6,7 @@ set(engine_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/fastfile.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/raw-file.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/sound-and-state.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/client-entity.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/optional-vpx.patch"
 )
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${upstream_cmake}" ${engine_patches})

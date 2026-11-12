@@ -1,0 +1,1745 @@
+--- a/src/bgame/bg_local.h
++++ b/src/bgame/bg_local.h
+@@ -305,40 +305,46 @@
+         unsigned int fxProjExplosion;
+         unsigned int fxHeartbeat;
+         centity_s *updateDelayedNext;
+-        unsigned __int32 applyLeftHandIK : 1;
+-        unsigned __int32 nextValid : 1;
+-        unsigned __int32 bMuzzleFlash : 1;
+-        unsigned __int32 bMuzzleFlashLeft : 1;
+-        unsigned __int32 bTrailMade : 1;
+-        unsigned __int32 isBurning : 1;
+-        unsigned __int32 skipBloodImpacts : 1;
+-        unsigned __int32 heroBloodImpact : 1;
+-        unsigned __int32 scriptThreaded : 1;
+-        unsigned __int32 clientRumbleLoop : 1;
+-        unsigned __int32 didOverheatFx : 1;
+-        unsigned __int32 leftFootstep : 1;
+-        unsigned __int32 rightFootstep : 1;
+-        unsigned __int32 leftRearFootstep : 1;
+-        unsigned __int32 rightRearFootstep : 1;
+-        unsigned __int32 bIsTrigger : 1;
+-        unsigned __int32 bIsTriggerRadius : 1;
+-        unsigned __int32 bIsOneShot : 1;
+-        unsigned __int32 bIsPlaneOnRadar : 1;
+-        unsigned __int32 bFloatLonger : 1;
+-        unsigned __int32 bForceBuoyancy : 1;
+-        unsigned __int32 bIgnoreRagdoll : 1;
+-        unsigned __int32 bClientFlagsNeedProcessing : 1;
+-        unsigned __int32 bUpdatedSinceReset : 1;
+-        unsigned __int32 bUpdateToggle : 1;
+-        // padding bit
+-        // padding bit
+-        // padding bit
+-        // padding bit
+-        // padding bit
+-        // padding bit
+-        // padding bit
+-};
+-static_assert(sizeof(centity_s) == 0x328);
++        union
++        {
++            unsigned __int32 clientFlags;
++            struct
++            {
++                unsigned __int32 applyLeftHandIK : 1;
++                unsigned __int32 nextValid : 1;
++                unsigned __int32 bMuzzleFlash : 1;
++                unsigned __int32 bMuzzleFlashLeft : 1;
++                unsigned __int32 bTrailMade : 1;
++                unsigned __int32 isBurning : 1;
++                unsigned __int32 skipBloodImpacts : 1;
++                unsigned __int32 heroBloodImpact : 1;
++                unsigned __int32 scriptThreaded : 1;
++                unsigned __int32 clientRumbleLoop : 1;
++                unsigned __int32 didOverheatFx : 1;
++                unsigned __int32 leftFootstep : 1;
++                unsigned __int32 rightFootstep : 1;
++                unsigned __int32 leftRearFootstep : 1;
++                unsigned __int32 rightRearFootstep : 1;
++                unsigned __int32 bIsTrigger : 1;
++                unsigned __int32 bIsTriggerRadius : 1;
++                unsigned __int32 bIsOneShot : 1;
++                unsigned __int32 bIsPlaneOnRadar : 1;
++                unsigned __int32 bFloatLonger : 1;
++                unsigned __int32 bForceBuoyancy : 1;
++                unsigned __int32 bIgnoreRagdoll : 1;
++                unsigned __int32 bClientFlagsNeedProcessing : 1;
++                unsigned __int32 bUpdatedSinceReset : 1;
++                unsigned __int32 bUpdateToggle : 1;
++                // padding bit
++                // padding bit
++                // padding bit
++                // padding bit
++                // padding bit
++                // padding bit
++                // padding bit
++            };
++        };
++};
+ 
+ struct fake_centity_s // sizeof=0x32C
+ {                                                                             // XREF: fake_centity_t/r
+--- a/src/EffectsCore/fx_marks.cpp
++++ b/src/EffectsCore/fx_marks.cpp
+@@ -619,7 +619,7 @@
+         markMaxs[1] = origin[1] + radius;
+         markMaxs[2] = origin[2] + radius;
+         ent = CG_GetEntity(localClientNum, entityIndex);
+-        if (((*((_DWORD *)ent + 201) >> 1) & 1) != 0 && ent->nextState.solid == 0xFFFFFF)
++        if (((ent->clientFlags >> 1) & 1) != 0 && ent->nextState.solid == 0xFFFFFF)
+         {
+             brushModel = R_GetBrushModel(ent->nextState.index.brushmodel);
+             AnglesToAxis(ent->pose.angles, entAxis);
+@@ -741,7 +741,7 @@
+     if ( entityIndex != 1023 )
+     {
+         ent = CG_GetEntity(localClientNum, entityIndex);
+-        if ( ((*((unsigned int *)ent + 201) >> 1) & 1) != 0 )
++        if ( ((ent->clientFlags >> 1) & 1) != 0 )
+         {
+             dObj = Com_GetClientDObj(ent->nextState.number, localClientNum);
+             if ( dObj )
+--- a/src/EffectsCore/fx_update.cpp
++++ b/src/EffectsCore/fx_update.cpp
+@@ -865,7 +865,7 @@
+     if ( dobjHandle >= 1536 )
+         return 1;
+     cent = CG_GetEntity(localClientNum, dobjHandle);
+-    if ( ((*((unsigned int *)cent + 201) >> 1) & 1) == 0 )
++    if ( ((cent->clientFlags >> 1) & 1) == 0 )
+         return 0;
+     return (cent->nextState.lerp.eFlags & 2) == 0 || (cent->nextState.lerp.eFlags & 0x20) == 0;
+ }
+--- a/src/aim_assist/aim_assist.cpp
++++ b/src/aim_assist/aim_assist.cpp
+@@ -549,7 +549,7 @@
+         {
+             target = &targetList[targetIndex];
+             cent = CG_GetEntity(localClientNum, target->entIndex);
+-            if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0
++            if ( ((cent->clientFlags >> 1) & 1) != 0
+                 && target->worldDistSqr <= (float)(aim_assist_min_target_distance->current.value
+                                                                                  * aim_assist_min_target_distance->current.value) )
+             {
+@@ -2045,7 +2045,7 @@
+     else
+     {
+         cent = CG_GetEntity(localClientNum, aaGlob->autoMeleeTargetEnt);
+-        if ( ((*((unsigned int *)cent + 201) >> 1) & 1) == 0 )
++        if ( ((cent->clientFlags >> 1) & 1) == 0 )
+             return 0;
+         if ( !AimAssist_CalcAimPos(localClientNum, cent, 0, aimPos) )
+             return 0;
+--- a/src/aim_assist/aim_target.cpp
++++ b/src/aim_assist/aim_target.cpp
+@@ -138,7 +138,7 @@
+     cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+     if ( !ent && !Assert_MyHandler("C:\\projects_pc\\cod\\codsrc\\src\\aim_assist\\aim_target.cpp", 902, 0, "%s", "ent") )
+         __debugbreak();
+-    if ( ((*((unsigned int *)ent + 201) >> 1) & 1) == 0
++    if ( ((ent->clientFlags >> 1) & 1) == 0
+         && !Assert_MyHandler(
+                     "C:\\projects_pc\\cod\\codsrc\\src\\aim_assist\\aim_target.cpp",
+                     903,
+@@ -227,7 +227,7 @@
+     {
+         __debugbreak();
+     }
+-    if ( ((*((unsigned int *)targetEnt + 201) >> 1) & 1) == 0
++    if ( ((targetEnt->clientFlags >> 1) & 1) == 0
+         && !Assert_MyHandler(
+                     "C:\\projects_pc\\cod\\codsrc\\src\\aim_assist\\aim_target.cpp",
+                     584,
+@@ -787,7 +787,7 @@
+     {
+         cent = CG_GetEntity((int)localClientNum, cgameGlob->nextSnap->entities[snapEntIndex].number);
+         if ( (cent->nextState.lerp.eFlags & 0x20) == 0
+-            && ((*((unsigned int *)cent + 201) >> 1) & 1) != 0
++            && ((cent->clientFlags >> 1) & 1) != 0
+             && cgameGlob->predictedPlayerState.clientNum != cent->nextState.number )
+         {
+             eType = cent->nextState.eType;
+--- a/src/cgame/cg_camera.cpp
++++ b/src/cgame/cg_camera.cpp
+@@ -920,7 +920,7 @@
+         vehicle = CG_GetEntity(localClientNum, cgameGlob->predictedPlayerState.viewlocked_entNum);
+         if ( vehicle )
+         {
+-            if ( ((*((unsigned int *)vehicle + 201) >> 1) & 1) != 0 )
++            if ( ((vehicle->clientFlags >> 1) & 1) != 0 )
+             {
+                 info = CG_GetVehicleInfo(vehicle->nextState.vehicleState.vehicleInfoIndex);
+                 if ( info->cameraFOV <= cg_fovMin->current.value )
+@@ -2138,7 +2138,7 @@
+     ps = &cgameGlob->predictedPlayerState;
+     vehicle = CG_GetEntity(localClientNum, cgameGlob->predictedPlayerState.viewlocked_entNum);
+     info = CG_GetVehicleInfo(vehicle->nextState.vehicleState.vehicleInfoIndex);
+-    if ( ((*((unsigned int *)vehicle + 201) >> 1) & 1) != 0 && (vehicle->nitrousVeh || ps->vehicleType == 6) )
++    if ( ((vehicle->clientFlags >> 1) & 1) != 0 && (vehicle->nitrousVeh || ps->vehicleType == 6) )
+     {
+         if ( cgameGlob->vehicleInitView )
+         {
+--- a/src/cgame/cg_draw_names.cpp
++++ b/src/cgame/cg_draw_names.cpp
+@@ -652,7 +652,7 @@
+         if ( ParentID < com_maxclients->current.integer )
+         {
+             ParentEnt = CG_GetEntity(localClientNum, ParentID);
+-            if ( ((*((unsigned int *)ParentEnt + 201) >> 1) & 1) != 0 && (ParentEnt->nextState.lerp.eFlags2 & 0x10000000) != 0 )
++            if ( ((ParentEnt->clientFlags >> 1) & 1) != 0 && (ParentEnt->nextState.lerp.eFlags2 & 0x10000000) != 0 )
+                 return 1;
+         }
+     }
+@@ -830,7 +830,7 @@
+     centity_s *vehCent; // [esp+Ch] [ebp-Ch]
+     bool allowOccupant; // [esp+17h] [ebp-1h]
+ 
+-    if ( ((*((unsigned int *)cent + 201) >> 1) & 1) == 0 )
++    if ( ((cent->clientFlags >> 1) & 1) == 0 )
+         return 0;
+     if ( cent->nextState.eType != 1 && cent->nextState.eType != 14 )
+         return 0;
+--- a/src/cgame/cg_event.cpp
++++ b/src/cgame/cg_event.cpp
+@@ -94,7 +94,7 @@
+     for ( i = 0; i < 32; ++i )
+     {
+         cent = CG_GetEntity(localClientNum, i);
+-        if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
++        if ( ((cent->clientFlags >> 1) & 1) != 0 )
+         {
+             value = CScr_GetMeansOfDeathConstString(mod);
+             Scr_AddConstString(value, SCRIPTINSTANCE_CLIENT);
+@@ -771,7 +771,7 @@
+                     goto LABEL_570;
+                 case EV_FIRE_WEAPON:
+                 case EV_FIRE_WEAPON_LASTSHOT:
+-                    if (((*((_DWORD *)cent + 201) >> 1) & 1) != 0 && cent->nextState.eType == 17 || cent->nextState.eType == 1)
++                    if (((cent->clientFlags >> 1) & 1) != 0 && cent->nextState.eType == 17 || cent->nextState.eType == 1)
+                     {
+                         Scr_AddConstString(cscr_const.face_shoot_single, SCRIPTINSTANCE_CLIENT);
+                         CScr_Notify(localClientNum, cent, cscr_const.face, 1u);
+@@ -781,7 +781,7 @@
+                     return;
+                 case EV_FIRE_WEAPON_LEFT:
+                 case EV_FIRE_WEAPON_LASTSHOT_LEFT:
+-                    if (((*((_DWORD *)cent + 201) >> 1) & 1) != 0 && cent->nextState.eType == 17 || cent->nextState.eType == 1)
++                    if (((cent->clientFlags >> 1) & 1) != 0 && cent->nextState.eType == 17 || cent->nextState.eType == 1)
+                     {
+                         Scr_AddConstString(cscr_const.face_shoot_single, SCRIPTINSTANCE_CLIENT);
+                         CScr_Notify(localClientNum, cent, cscr_const.face, 1u);
+@@ -807,7 +807,7 @@
+                     CG_EjectWeaponBrass(localClientNum, p_nextState, event, p_nextState->weapon);
+                     return;
+                 case EV_MELEE_SWIPE:
+-                    if (((*((_DWORD *)cent + 201) >> 1) & 1) != 0 && cent->nextState.eType == 17 || cent->nextState.eType == 1)
++                    if (((cent->clientFlags >> 1) & 1) != 0 && cent->nextState.eType == 17 || cent->nextState.eType == 1)
+                     {
+                         Scr_AddConstString(cscr_const.face_melee, SCRIPTINSTANCE_CLIENT);
+                         CScr_Notify(localClientNum, cent, cscr_const.face, 1u);
+@@ -819,7 +819,7 @@
+                         v7 = SND_FindAliasId((char *)meleeWeaponDef->meleeSwipeSound);
+                     goto LABEL_570;
+                 case EV_FIRE_MELEE:
+-                    if (((*((_DWORD *)cent + 201) >> 1) & 1) != 0 && cent->nextState.eType == 17 || cent->nextState.eType == 1)
++                    if (((cent->clientFlags >> 1) & 1) != 0 && cent->nextState.eType == 17 || cent->nextState.eType == 1)
+                     {
+                         Scr_AddConstString(cscr_const.face_melee, SCRIPTINSTANCE_CLIENT);
+                         CScr_Notify(localClientNum, cent, cscr_const.face, 1u);
+@@ -931,14 +931,14 @@
+                     else
+                         CG_FireWeapon(localClientNum, cent, event, scr_const.tag_flash_2, 0, &cgameGlob->nextSnap->ps, 0);
+                     attackerCent = CG_GetEntity(localClientNum, eventParm);
+-                    if (((*((_DWORD *)attackerCent + 201) >> 1) & 1) != 0
++                    if (((attackerCent->clientFlags >> 1) & 1) != 0
+                         && attackerCent->nextState.eType == eType
+                         && ps->viewlocked_entNum != cent->nextState.number)
+                     {
+                         CG_CompassAddWeaponPingInfo(localClientNum, attackerCent, cent->pose.origin, 50);
+                         //BG_EvalVehicleName();
+                     }
+-                    if (((*((_DWORD *)attackerCent + 201) >> 1) & 1) != 0 && attackerCent->nextState.eType == 11)
++                    if (((attackerCent->clientFlags >> 1) & 1) != 0 && attackerCent->nextState.eType == 11)
+                         CG_AddTurretWeaponPingInfo(localClientNum, attackerCent, cent->pose.origin, 50);
+                     return;
+                 case EV_FIRE_QUADBARREL_1:
+@@ -1500,8 +1500,8 @@
+                     return;
+                 case EV_BLOOD_IMPACTS:
+                     v33 = CG_GetEntity(localClientNum, p_nextState->lerp.pos.trTime);
+-                    *((_DWORD *)v33 + 201) = ((p_nextState->eventParm == 0) << 6) | *((_DWORD *)v33 + 201) & 0xFFFFFFBF;
+-                    *((_DWORD *)v33 + 201) = ((p_nextState->eventParm == 2) << 7) | *((_DWORD *)v33 + 201) & 0xFFFFFF7F;
++                    v33->clientFlags = ((p_nextState->eventParm == 0) << 6) | v33->clientFlags & 0xFFFFFFBF;
++                    v33->clientFlags = ((p_nextState->eventParm == 2) << 7) | v33->clientFlags & 0xFFFFFF7F;
+                     return;
+                 case EV_SETWETNESS:
+                     CG_SetWetness(
+@@ -1631,7 +1631,7 @@
+                     CG_StartShakeCamera(localClientNum, 0.05f, 100, cent->pose.origin, 100.0);
+                     v103 = CG_GetEntity(localClientNum, eventParm);
+                     if (v103
+-                        && ((*((_DWORD *)v103 + 201) >> 1) & 1) != 0
++                        && ((v103->clientFlags >> 1) & 1) != 0
+                         && v103->nextState.eType == v104
+                         && ps->viewlocked_entNum != cent->nextState.number)
+                     {
+@@ -1846,7 +1846,7 @@
+                         break;
+                     }
+                     centa = CG_GetEntity(localClientNum, p_nextState->number);
+-                    if (((*((_DWORD *)centa + 201) >> 1) & 1) != 0)
++                    if (((centa->clientFlags >> 1) & 1) != 0)
+                         CScr_Notify(localClientNum, centa, cscr_const.face, 1u);
+                     return;
+                 case EV_SETLOCALWIND:
+@@ -1857,11 +1857,11 @@
+                     return;
+                 case EV_FLOAT_LONGER:
+                     v22 = CG_GetEntity(localClientNum, p_nextState->otherEntityNum);
+-                    *((_DWORD *)v22 + 201) |= 0x80000u;
++                    v22->clientFlags |= 0x80000u;
+                     return;
+                 case EV_FORCE_BUOYANCY:
+                     v23 = CG_GetEntity(localClientNum, p_nextState->otherEntityNum);
+-                    *((_DWORD *)v23 + 201) |= 0x100000u;
++                    v23->clientFlags |= 0x100000u;
+                     return;
+                 case EV_DISABLE_DEPTH_BUOYANCY_ADJUSTMENTS:
+                     v98 = CG_GetEntity(localClientNum, p_nextState->otherEntityNum);
+--- a/src/cgame/cg_hudelem.cpp
++++ b/src/cgame/cg_hudelem.cpp
+@@ -2088,7 +2088,7 @@
+                     if (elem->targetEntNum == LocalClientGlobals->predictedPlayerEntity.nextState.number)
+                         return;
+                     cent = CG_GetEntity(localClientNum, elem->targetEntNum);
+-                    if (((*((_DWORD *)cent + 201) >> 1) & 1) == 0)
++                    if (((cent->clientFlags >> 1) & 1) == 0)
+                     {
+                         Com_PrintWarning(
+                             1,
+@@ -2544,7 +2544,7 @@
+                         if ( elem->targetEntNum == cgameGlob->predictedPlayerEntity.nextState.number )
+                             return;
+                         cent = CG_GetEntity(localClientNum, elem->targetEntNum);
+-                        if ( ((*((unsigned int *)cent + 201) >> 1) & 1) == 0 )
++                        if ( ((cent->clientFlags >> 1) & 1) == 0 )
+                         {
+                             Com_PrintWarning(
+                                 1,
+--- a/src/cgame/cg_scr_main.cpp
++++ b/src/cgame/cg_scr_main.cpp
+@@ -3777,7 +3777,7 @@
+                     __debugbreak();
+                 }
+                 ent->nextState.index.brushmodel = modelIndexa;
+-                *((unsigned int *)ent + 201) |= 2u;
++                ent->clientFlags |= 2u;
+             }
+         }
+         if ( !strcmp(team, "free") )
+@@ -3793,7 +3793,7 @@
+             teamEnum = TEAM_ALLIES;
+         }
+         AssignToSmallerType<unsigned char>(&ent->nextState.faction.iHeadIconTeam, teamEnum | (4 * owner));
+-        *((unsigned int *)ent + 201) |= 0x40000u;
++        ent->clientFlags |= 0x40000u;
+         v0 = Material_Register((char *)compassMaterialName, 7);
+         ent->compassMaterial = v0;
+         CScr_AddEntity(ent, localClientNum);
+@@ -5337,7 +5337,7 @@
+     for ( i = 0; i < 1536; ++i )
+     {
+         ent = CG_GetEntity(localClientNum, i);
+-        if ( ((*((unsigned int *)ent + 201) >> 1) & 1) != 0 )
++        if ( ((ent->clientFlags >> 1) & 1) != 0 )
+         {
+             ofs = cent_fields[offset].ofs;
+             if ( *(unsigned __int16 *)((char *)&ent->pose.lightingHandle + ofs) )
+@@ -5419,7 +5419,7 @@
+     localClientNum = CScr_GetLocalClientNum(0);
+     centNum.intValue = Scr_GetInt(1u, SCRIPTINSTANCE_CLIENT);
+     cent = CG_GetEntity(localClientNum, centNum.intValue);
+-    if ( ((*((unsigned int *)cent + 201) >> 1) & 1) == 0 )
++    if ( ((cent->clientFlags >> 1) & 1) == 0 )
+         Scr_Error(SCRIPTINSTANCE_CLIENT, "GetEntNum used on nonexistant ent.", 0);
+     CScr_AddEntity(cent, localClientNum);
+ }
+@@ -5446,7 +5446,7 @@
+         for ( i = 0; i < 1536; ++i )
+         {
+             cent = CG_GetEntity(localClientNum, i);
+-            if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
++            if ( ((cent->clientFlags >> 1) & 1) != 0 )
+             {
+                 CScr_AddEntity(cent, localClientNum);
+                 Scr_AddArray(SCRIPTINSTANCE_CLIENT);
+@@ -5478,7 +5478,7 @@
+                 for ( ia = 0; ia < 1536; ++ia )
+                 {
+                     centa = CG_GetEntity(localClientNum, ia);
+-                    if ( ((*((unsigned int *)centa + 201) >> 1) & 1) != 0 )
++                    if ( ((centa->clientFlags >> 1) & 1) != 0 )
+                     {
+                         ofs = cent_fields[offset].ofs;
+                         if ( *(unsigned __int16 *)((char *)&centa->pose.lightingHandle + ofs) )
+@@ -6185,7 +6185,7 @@
+                 __debugbreak();
+             }
+             cent->nextState.index.brushmodel = modelIndexa;
+-            *((unsigned int *)cent + 201) |= 2u;
++            cent->clientFlags |= 2u;
+         }
+         CG_ScriptMover_GetDObj(entref.client, cent);
+     }
+@@ -9255,7 +9255,7 @@
+             CG_GetFakeEntity(entref.client, entref.entnum);
+     }
+     String = Scr_GetString(0, SCRIPTINSTANCE_CLIENT);
+-    *((unsigned int *)pSelf + 201) |= 0x40000u;
++    pSelf->clientFlags |= 0x40000u;
+     pSelf->compassMaterial = Material_Register(String, 7);
+ }
+ 
+@@ -9317,7 +9317,7 @@
+ 
+     ent = CG_GetEntity(entref.client, entref.entnum);
+     if (ent->nextState.solid == 0xFFFFFF
+-        || ((*((unsigned int *)ent + 201) >> 15) & 1) != 0 && (*((unsigned int *)ent + 201) & 0x10000) != 0 )
++        || ((ent->clientFlags >> 15) & 1) != 0 && (ent->clientFlags & 0x10000) != 0 )
+     {
+         pTemp = ent;
+         tempEntref.client = entref.client;
+@@ -9328,7 +9328,7 @@
+         otherEntref = v7;
+         ent = CG_GetEntity(v7.client, v7.entnum);
+         if (ent->nextState.solid == 0xFFFFFF
+-            || ((*((unsigned int *)ent + 201) >> 15) & 1) != 0 && (*((unsigned int *)ent + 201) & 0x10000) != 0 )
++            || ((ent->clientFlags >> 15) & 1) != 0 && (ent->clientFlags & 0x10000) != 0 )
+         {
+             Scr_Error(SCRIPTINSTANCE_CLIENT, "istouching cannot be called on 2 brush/cylinder entities", 0);
+         }
+@@ -10372,9 +10372,9 @@
+     trace_t trace; // [esp+1Ch] [ebp-44h] BYREF
+     float center[2]; // [esp+58h] [ebp-8h]
+ 
+-    if ( ((*((unsigned int *)cent + 201) >> 15) & 1) == 0 )
++    if ( ((cent->clientFlags >> 15) & 1) == 0 )
+         return 0;
+-    if ( (*((unsigned int *)cent + 201) & 0x10000) != 0 )
++    if ( (cent->clientFlags & 0x10000) != 0 )
+     {
+         if ( cent->pose.actor.height != 0.0
+             && !Assert_MyHandler(
+@@ -10520,7 +10520,7 @@
+         for ( i = 0; i < v23; ++i )
+         {
+             other = CG_GetEntity(localClientNum, entityList[i]);
+-            if ( ((*((unsigned int *)other + 201) >> 15) & 1) != 0
++            if ( ((other->clientFlags >> 15) & 1) != 0
+                 && (contentMask & other->pose.fx.triggerTime) != 0
+                 && CG_EntityContact(areaMins, areaMaxs, other) )
+             {
+--- a/src/cgame/cg_spawn.cpp
++++ b/src/cgame/cg_spawn.cpp
+@@ -59,7 +59,7 @@
+             {
+                 result = "DESTRUCTABLE";
+             }
+-            else if ( ((*((unsigned int *)cent + 201) >> 15) & 1) != 0 )
++            else if ( ((cent->clientFlags >> 15) & 1) != 0 )
+             {
+                 result = "TRIGGER";
+             }
+@@ -339,7 +339,7 @@
+ {
+     _BYTE mins[24]; // [esp+8h] [ebp-18h] OVERLAPPED BYREF
+ 
+-    if ( ((*((unsigned int *)ent + 201) >> 1) & 1) == 0
++    if ( ((ent->clientFlags >> 1) & 1) == 0
+         && !Assert_MyHandler("C:\\projects_pc\\cod\\codsrc\\src\\cgame\\cg_spawn.cpp", 520, 0, "%s", "ent->nextValid") )
+     {
+         __debugbreak();
+@@ -395,7 +395,7 @@
+     if ( (spawnflags & 0x10) != 0 )
+         self->pose.fx.triggerTime |= 8u;
+     if ( (spawnflags & 0x40) != 0 )
+-        *((unsigned int *)self + 201) |= 0x20000u;
++        self->clientFlags |= 0x20000u;
+ }
+ 
+ void __cdecl CG_SP_trigger_multiple(int localClientNum, centity_s *ent, char spawnFlags)
+@@ -412,7 +412,7 @@
+     if ( cg_level.spawnVar.spawnVarsValid && CG_SpawnFloat("wait", "", &wait) && wait <= 0.0 )
+     {
+         if ( (waitSpawnFlag & 0x40) != 0 )
+-            *((unsigned int *)ent + 201) |= 0x20000u;
++            ent->clientFlags |= 0x20000u;
+         else
+             *spawnflags |= waitSpawnFlag;
+     }
+@@ -554,7 +554,7 @@
+             ent = CG_Spawn(localClientNum);
+             CG_ParseEntityFields(localClientNum, ent, spawnVar, 0);
+             CG_SP_trigger_multiple(localClientNum, ent, flags);
+-            *((unsigned int *)ent + 201) |= 0x8000u;
++            ent->clientFlags |= 0x8000u;
+             return;
+         }
+         if ( !strcmp("trigger_radius", classname) )
+@@ -562,8 +562,8 @@
+             ent = CG_Spawn(localClientNum);
+             CG_ParseEntityFields(localClientNum, ent, spawnVar, 0);
+             CG_SP_trigger_radius(localClientNum, ent, flags);
+-            *((unsigned int *)ent + 201) |= 0x8000u;
+-            *((unsigned int *)ent + 201) |= 0x10000u;
++            ent->clientFlags |= 0x8000u;
++            ent->clientFlags |= 0x10000u;
+             return;
+         }
+         if ( !strcmp("trigger_once", classname) )
+@@ -571,7 +571,7 @@
+             ent = CG_Spawn(localClientNum);
+             CG_ParseEntityFields(localClientNum, ent, spawnVar, 0);
+             CG_SP_trigger_once(localClientNum, ent, flags);
+-            *((unsigned int *)ent + 201) |= 0x8000u;
++            ent->clientFlags |= 0x8000u;
+         }
+         else
+         {
+@@ -797,7 +797,7 @@
+                         __debugbreak();
+                     }
+                     ent->nextState.index.brushmodel = modelIndexa;
+-                    *((unsigned int *)ent + 201) |= 2u;
++                    ent->clientFlags |= 2u;
+                 }
+             }
+             break;
+--- a/src/cgame/cg_weapons.cpp
++++ b/src/cgame/cg_weapons.cpp
+@@ -2437,7 +2437,7 @@
+                     {
+                         if ( ps->weaponstate == 6
+                             || ps->weaponstate == 31
+-                            || ps->weaponstate == 41 && ((*((unsigned int *)cent + 201) >> 2) & 1) != 0 )
++                            || ps->weaponstate == 41 && ((cent->clientFlags >> 2) & 1) != 0 )
+                         {
+                             fLeanDist = scr_const.tag_flash;
+                             v5 = CG_WeaponDObjHandle(localClientNum);
+@@ -2445,7 +2445,7 @@
+                         }
+                         if ( ps->weaponstateLeft == 6
+                             || ps->weaponstateLeft == 31
+-                            || ps->weaponstateLeft == 41 && ((*((unsigned int *)cent + 201) >> 3) & 1) != 0 )
++                            || ps->weaponstateLeft == 41 && ((cent->clientFlags >> 3) & 1) != 0 )
+                         {
+                             fLeanDista = scr_const.tag_flash1;
+                             v6 = CG_WeaponDObjHandle(localClientNum);
+@@ -2468,20 +2468,20 @@
+                         if ( obj )
+                             CG_DObjGetWorldTagPos(&cgameGlob->predictedPlayerEntity.pose, obj, scr_const.tag_flash, pos);
+                     }
+-                    if ( weapDef->bDualWield && ((*((unsigned int *)cent + 201) >> 3) & 1) != 0 )
++                    if ( weapDef->bDualWield && ((cent->clientFlags >> 3) & 1) != 0 )
+                         WeaponFlash(localClientNum, cent->nextState.number, weaponNum, 0, scr_const.tag_flash1);
+-                    if ( ((*((unsigned int *)cent + 201) >> 2) & 1) != 0 && weapDef->bUseAltTagFlash )
++                    if ( ((cent->clientFlags >> 2) & 1) != 0 && weapDef->bUseAltTagFlash )
+                     {
+                         WeaponFlash(localClientNum, cent->nextState.number, weaponNum, 0, scr_const.tag_flash_alt);
+                     }
+-                    else if ( ((*((unsigned int *)cent + 201) >> 2) & 1) != 0 )
++                    else if ( ((cent->clientFlags >> 2) & 1) != 0 )
+                     {
+                         WeaponFlash(localClientNum, cent->nextState.number, weaponNum, 0, scr_const.tag_flash);
+                     }
+                 }
+             }
+-            *((unsigned int *)cent + 201) &= ~4u;
+-            *((unsigned int *)cent + 201) &= ~8u;
++            cent->clientFlags &= ~4u;
++            cent->clientFlags &= ~8u;
+         }
+         Weapon_DrawTagAxis(localClientNum, cent->nextState.number, weaponNum, bViewModel);
+         if ( !bViewModel )
+@@ -2587,7 +2587,7 @@
+     }
+     if ( !cent && !Assert_MyHandler("C:\\projects_pc\\cod\\codsrc\\src\\cgame\\cg_weapons.cpp", 3800, 0, "%s", "cent") )
+         __debugbreak();
+-    if ( ((*((unsigned int *)cent + 201) >> 2) & 1) == 0 && ((*((unsigned int *)cent + 201) >> 3) & 1) == 0 )
++    if ( ((cent->clientFlags >> 2) & 1) == 0 && ((cent->clientFlags >> 3) & 1) == 0 )
+         return 0;
+     if ( bViewModel )
+         return 1;
+@@ -4953,10 +4953,10 @@
+             __debugbreak();
+         }
+         if ( leftGun )
+-            v7 = *((unsigned int *)cent + 201) | 8;
++            v7 = cent->clientFlags | 8;
+         else
+-            v7 = *((unsigned int *)cent + 201) | 4;
+-        *((unsigned int *)cent + 201) = v7;
++            v7 = cent->clientFlags | 4;
++        cent->clientFlags = v7;
+         cgameGlob = CG_GetLocalClientGlobals((int)localClientNum);
+         isLocalPlayer = 0;
+         nextSnap = cgameGlob->nextSnap;
+@@ -5799,7 +5799,7 @@
+     shotDirection[1] = cgameGlob->refdef.vieworg[1] - endPosition[1];
+     shotDirection[2] = cgameGlob->refdef.vieworg[2] - endPosition[2];
+     Vec3NormalizeFast(shotDirection);
+-    if ( ((*((unsigned int *)shot_ent + 201) >> 1) & 1) != 0 )
++    if ( ((shot_ent->clientFlags >> 1) & 1) != 0 )
+     {
+         shooter_index = shot_ent->nextState.otherEntityNum;
+         CG_CompassAddFakeFirePingInfo(
+@@ -5827,7 +5827,7 @@
+ {
+     unsigned __int16 t; // [esp+4h] [ebp-4h]
+ 
+-    if ( ((*((unsigned int *)shot_ent + 201) >> 1) & 1) != 0 && shot_ent->nextState.eType < 21 )
++    if ( ((shot_ent->clientFlags >> 1) & 1) != 0 && shot_ent->nextState.eType < 21 )
+     {
+         CScr_NotifyNum(localClientNum, entNum, 0, cscr_const.fake_fire, 0);
+     }
+@@ -6727,7 +6727,7 @@
+     if ( (hitContents & 0x800) == 0 )
+     {
+         weapDef = BG_GetWeaponDef(weaponIndex);
+-        if ( ((*((unsigned int *)attackee + 201) >> 1) & 1) != 0 && attackee->nextState.eType == 17
++        if ( ((attackee->clientFlags >> 1) & 1) != 0 && attackee->nextState.eType == 17
+             || attackee->nextState.eType == 1 )
+         {
+             Scr_AddConstString(cscr_const.face_pain, SCRIPTINSTANCE_CLIENT);
+@@ -6739,11 +6739,11 @@
+     if ( fx && surfType == 7 )
+     {
+         cent = CG_GetEntity(localClientNum, targetEntityNum);
+-        if ( ((*((unsigned int *)cent + 201) >> 6) & 1) != 0 )
++        if ( ((cent->clientFlags >> 6) & 1) != 0 )
+         {
+             fx = 0;
+         }
+-        else if ( ((*((unsigned int *)cent + 201) >> 7) & 1) != 0 )
++        else if ( ((cent->clientFlags >> 7) & 1) != 0 )
+         {
+             fx = cgMedia.fxDtpArmSlide2;
+         }
+@@ -6768,11 +6768,11 @@
+                 if ( (nextSnap->ps.otherFlags & 6) == 0 || sourceEntityNum != nextSnap->ps.clientNum )
+                     targetEntityNum = 1023;
+             }
+-            if ( ((*((unsigned int *)attackee + 201) >> 1) & 1) != 0 && boneIndex != 254 && surfType == 7 )
++            if ( ((attackee->clientFlags >> 1) & 1) != 0 && boneIndex != 254 && surfType == 7 )
+             {
+                 FX_PlayBoltedEffect(localClientNum, fx, cgameGlob->time, targetEntityNum, boneIndex, position, axis);
+             }
+-            else if ( ((*((unsigned int *)attackee + 201) >> 1) & 1) != 0
++            else if ( ((attackee->clientFlags >> 1) & 1) != 0
+                          && (attackee->nextState.eType == 1 || attackee->nextState.eType == 2)
+                          && boneIndex != 254
+                          && surfType == 13 )
+@@ -7478,7 +7478,7 @@
+         veh = CG_GetEntity(localClientNum, cgameGlob->bgs.clientinfo[clientNum].attachedVehEntNum);
+         if ( veh )
+         {
+-            if ( ((*((unsigned int *)veh + 201) >> 1) & 1) != 0 )
++            if ( ((veh->clientFlags >> 1) & 1) != 0 )
+             {
+                 vehInfo = CG_GetVehicleInfo(veh->nextState.vehicleState.vehicleInfoIndex);
+                 if ( !vehInfo
+--- a/src/cgame_mp/cg_actors_mp.cpp
++++ b/src/cgame_mp/cg_actors_mp.cpp
+@@ -26,7 +26,7 @@
+     if ( CL_LocalClient_IsFirstActive(localClientNum) )
+     {
+         if ( cent )
+-            v2 = ((*((unsigned int *)cent + 201) >> 8) & 1) != 0;
++            v2 = ((cent->clientFlags >> 8) & 1) != 0;
+         else
+             v2 = 0;
+     }
+@@ -54,7 +54,7 @@
+     XAnimTree_s *pAnimTree; // [esp+12Ch] [ebp-104h]
+     DObjModel_s dobjModels[32]; // [esp+130h] [ebp-100h] BYREF
+ 
+-    if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
++    if ( ((cent->clientFlags >> 1) & 1) != 0 )
+     {
+         p_nextState = &cent->nextState;
+         cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+@@ -200,7 +200,7 @@
+         {
+             if ( CG_EntityNeedsScriptThread(localClientNum, cent) )
+             {
+-                *((unsigned int *)cent + 201) |= 0x100u;
++                cent->clientFlags |= 0x100u;
+                 Scr_AddInt(localClientNum, SCRIPTINSTANCE_CLIENT);
+                 t = CScr_ExecEntThread(cent, cg_scr_data.entityspawned, 1u);
+                 Scr_FreeThread(t, SCRIPTINSTANCE_CLIENT);
+@@ -256,7 +256,7 @@
+     if ( !CL_LocalClient_IsFirstActive(localClientNum) )
+         return 0;
+     if ( cent )
+-        return ((*((unsigned int *)cent + 201) >> 8) & 1) == 0;
++        return ((cent->clientFlags >> 8) & 1) == 0;
+     return 0;
+ }
+ 
+--- a/src/cgame_mp/cg_animscripted_mp.cpp
++++ b/src/cgame_mp/cg_animscripted_mp.cpp
+@@ -13,7 +13,7 @@
+     DObj *objLink; // [esp+18h] [ebp-4h]
+ 
+     centLink = CG_GetEntity(localClientNum, linkEntNum);
+-    if ( ((*((unsigned int *)centLink + 201) >> 1) & 1) != 0 )
++    if ( ((centLink->clientFlags >> 1) & 1) != 0 )
+     {
+         objLink = GetLinkEntDObj(localClientNum, centLink);
+         if ( !objLink || !CG_DObjGetWorldTagMatrix(&centLink->pose, objLink, tagName, resultTagMat, &(*resultTagMat)[9]) )
+@@ -36,7 +36,7 @@
+ 
+ DObj *__cdecl GetLinkEntDObj(int localClientNum, centity_s *centLink)
+ {
+-    if ( ((*((unsigned int *)centLink + 201) >> 1) & 1) == 0
++    if ( ((centLink->clientFlags >> 1) & 1) == 0
+         && !Assert_MyHandler(
+                     "C:\\projects_pc\\cod\\codsrc\\src\\cgame_mp\\cg_animscripted_mp.cpp",
+                     12,
+@@ -349,7 +349,7 @@
+     {
+         __debugbreak();
+     }
+-    if ( ((*((unsigned int *)centParent + 201) >> 1) & 1) != 0 )
++    if ( ((centParent->clientFlags >> 1) & 1) != 0 )
+         return centParent;
+     Com_PrintWarning(
+         14,
+--- a/src/cgame_mp/cg_compassfriendlies_mp.cpp
++++ b/src/cgame_mp/cg_compassfriendlies_mp.cpp
+@@ -126,7 +126,7 @@
+     cent = CG_GetEntity(localClientNum, entityIndex);
+     if ( cent->nextState.eType != 14
+         && cent->nextState.eType != 13
+-        && (cent->nextState.eType != 6 || ((*((unsigned int *)cent + 201) >> 18) & 1) == 0)
++        && (cent->nextState.eType != 6 || ((cent->clientFlags >> 18) & 1) == 0)
+         && !Assert_MyHandler(
+                     "C:\\projects_pc\\cod\\codsrc\\src\\cgame_mp\\cg_compassfriendlies_mp.cpp",
+                     646,
+@@ -974,7 +974,7 @@
+                     if ( actor->enemy )
+                     {
+                         cent = CG_GetEntity(localClientNum, actorIndex);
+-                        if ( ((*((unsigned int *)cent + 201) >> 1) & 1) == 0
++                        if ( ((cent->clientFlags >> 1) & 1) == 0
+                             || cent->nextState.eType == 1 && (cent->nextState.lerp.eFlags & 0x40000) == 0 )
+                         {
+                             if ( DoLinesSurroundPoint(cgameGlob, radarLine1, radarLine2, actor->lastPos) )
+@@ -3264,8 +3264,8 @@
+             fadedColor[2] = color[2];
+             fadedColor[3] = color[3];
+             cent = CG_GetEntity(localClientNum, veh->entityNum);
+-            if ( (cent->nextState.eType == eType || ((*((unsigned int *)cent + 201) >> 18) & 1) != 0)
+-                && (eType == 13 || ((*((unsigned int *)cent + 201) >> 18) & 1) != 0 || CG_VehGetHealthPercentageEntity(cent) != 0.0) )
++            if ( (cent->nextState.eType == eType || ((cent->clientFlags >> 18) & 1) != 0)
++                && (eType == 13 || ((cent->clientFlags >> 18) & 1) != 0 || CG_VehGetHealthPercentageEntity(cent) != 0.0) )
+             {
+                 if ( veh->lastUpdate > cgameGlob->time )
+                     veh->lastUpdate = 0;
+@@ -3280,7 +3280,7 @@
+                                             veh->lastPos,
+                                             0,
+                                             xy);
+-                    if ( eType == 13 || ((*((unsigned int *)cent + 201) >> 18) & 1) != 0 || CG_IsVehicleMayhemGameType() )
++                    if ( eType == 13 || ((cent->clientFlags >> 18) & 1) != 0 || CG_IsVehicleMayhemGameType() )
+                         clipped = 0;
+                     if ( eType == 12 )
+                     {
+@@ -3304,7 +3304,7 @@
+                     friendly = 0;
+                     enemy = 0;
+                     isSelf = 0;
+-                    if ( eType == 13 || ((*((unsigned int *)cent + 201) >> 18) & 1) != 0 )
++                    if ( eType == 13 || ((cent->clientFlags >> 18) & 1) != 0 )
+                     {
+                         if ( !cent->compassMaterial || !*cent->compassMaterial->info.name )
+                             return;
+@@ -3320,7 +3320,7 @@
+                             fadedColor[3] = (1.0 - ScramblerEnemyAlpha) * fadedColor[3];
+                             if ( cgameGlob->globalScramblerActive )
+                                 fadedColor[3] = 0.0f;
+-                            if ( eType == 13 && ((*((unsigned int *)cent + 201) >> 18) & 1) != 0 || !isSelf )
++                            if ( eType == 13 && ((cent->clientFlags >> 18) & 1) != 0 || !isSelf )
+                             {
+                                 if ( friendly )
+                                 {
+--- a/src/cgame_mp/cg_consolecmds_mp.cpp
++++ b/src/cgame_mp/cg_consolecmds_mp.cpp
+@@ -308,7 +308,7 @@
+                 {
+                     cgameGlob->followCameraClient = clientNum;
+                     centTarget = CG_GetEntity(0, cgameGlob->followCameraClient);
+-                    if ( ((*((unsigned int *)centTarget + 201) >> 1) & 1) != 0 )
++                    if ( ((centTarget->clientFlags >> 1) & 1) != 0 )
+                     {
+                         cgameGlob->movieCameraOrigin[0] = centTarget->pose.origin[0];
+                         cgameGlob->movieCameraOrigin[1] = centTarget->pose.origin[1];
+--- a/src/cgame_mp/cg_ents_mp.cpp
++++ b/src/cgame_mp/cg_ents_mp.cpp
+@@ -139,7 +139,7 @@
+ 
+     if ( cent->nextState.lerp.u.turret.overheating )
+     {
+-        if ( ((*((unsigned int *)cent + 201) >> 10) & 1) == 0 )
++        if ( ((cent->clientFlags >> 10) & 1) == 0 )
+         {
+             weapDef = BG_GetWeaponDef(cent->nextState.weapon);
+             overheatSoundAlias = (char *)weapDef->overheatSound;
+@@ -153,12 +153,12 @@
+             CG_PlaySound(localClientNum, cent->nextState.number, cent->pose.origin, 0, 0, 1.0, AliasId);
+             if ( overheatEffect )
+                 CG_PlayBoltedEffect(localClientNum, overheatEffect, cent->nextState.number, scr_const.tag_flash);
+-            *((unsigned int *)cent + 201) |= 0x400u;
++            cent->clientFlags |= 0x400u;
+         }
+     }
+     else
+     {
+-        *((unsigned int *)cent + 201) &= ~0x400u;
++        cent->clientFlags &= ~0x400u;
+     }
+ }
+ 
+@@ -1021,28 +1021,28 @@
+ 
+ void __cdecl CG_DoFootsteps(int localClientNum, centity_s *cent)
+ {
+-    if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
++    if ( ((cent->clientFlags >> 1) & 1) != 0 )
+     {
+         CG_GetLocalClientGlobals(localClientNum);
+-        if ( ((*((unsigned int *)cent + 201) >> 11) & 1) != 0 )
++        if ( ((cent->clientFlags >> 11) & 1) != 0 )
+         {
+             CG_DoFootStep(localClientNum, cent, FOOTSTEP_FRONTLEFT);
+-            *((unsigned int *)cent + 201) &= ~0x800u;
+-        }
+-        if ( ((*((unsigned int *)cent + 201) >> 12) & 1) != 0 )
++            cent->clientFlags &= ~0x800u;
++        }
++        if ( ((cent->clientFlags >> 12) & 1) != 0 )
+         {
+             CG_DoFootStep(localClientNum, cent, FOOTSTEP_FRONTRIGHT);
+-            *((unsigned int *)cent + 201) &= ~0x1000u;
+-        }
+-        if ( ((*((unsigned int *)cent + 201) >> 13) & 1) != 0 )
++            cent->clientFlags &= ~0x1000u;
++        }
++        if ( ((cent->clientFlags >> 13) & 1) != 0 )
+         {
+             CG_DoFootStep(localClientNum, cent, FOOTSTEP_REARLEFT);
+-            *((unsigned int *)cent + 201) &= ~0x2000u;
+-        }
+-        if ( ((*((unsigned int *)cent + 201) >> 14) & 1) != 0 )
++            cent->clientFlags &= ~0x2000u;
++        }
++        if ( ((cent->clientFlags >> 14) & 1) != 0 )
+         {
+             CG_DoFootStep(localClientNum, cent, FOOTSTEP_REARRIGHT);
+-            *((unsigned int *)cent + 201) &= ~0x4000u;
++            cent->clientFlags &= ~0x4000u;
+         }
+     }
+ }
+@@ -1147,11 +1147,11 @@
+                     if ( note->GetNotifyStringName()[9] == 70
+                         || note->GetNotifyStringName()[9] == 102 )
+                     {
+-                        *((unsigned int *)cent + 201) |= 0x800u;
++                        cent->clientFlags |= 0x800u;
+                     }
+                     else
+                     {
+-                        *((unsigned int *)cent + 201) |= 0x2000u;
++                        cent->clientFlags |= 0x2000u;
+                     }
+                 }
+                 else if ( note->GetNotifyStringName()[8] == 82
+@@ -1160,23 +1160,23 @@
+                     if ( note->GetNotifyStringName()[9] == 70
+                         || note->GetNotifyStringName()[9] == 102 )
+                     {
+-                        *((unsigned int *)cent + 201) |= 0x1000u;
++                        cent->clientFlags |= 0x1000u;
+                     }
+                     else
+                     {
+-                        *((unsigned int *)cent + 201) |= 0x4000u;
++                        cent->clientFlags |= 0x4000u;
+                     }
+                 }
+                 else if ( note->GetNotifyStringName()[8] == 70
+                              || note->GetNotifyStringName()[8] == 102 )
+                 {
+-                    *((unsigned int *)cent + 201) |= 0x800u;
+-                    *((unsigned int *)cent + 201) |= 0x1000u;
++                    cent->clientFlags |= 0x800u;
++                    cent->clientFlags |= 0x1000u;
+                 }
+                 else
+                 {
+-                    *((unsigned int *)cent + 201) |= 0x2000u;
+-                    *((unsigned int *)cent + 201) |= 0x4000u;
++                    cent->clientFlags |= 0x2000u;
++                    cent->clientFlags |= 0x4000u;
+                 }
+             }
+         }
+@@ -1635,7 +1635,7 @@
+         switch ( cent->nextState.eType )
+         {
+             case 0:
+-                if ( ((*((unsigned int *)cent + 201) >> 15) & 1) != 0 )
++                if ( ((cent->clientFlags >> 15) & 1) != 0 )
+                 {
+                     if ( !cent->pose.player.tag[0] )
+                     {
+@@ -1648,7 +1648,7 @@
+                         color[1] = 1.0f;
+                         color[2] = 0.0f;
+                         color[3] = 1.0f;
+-                        if ( (*((unsigned int *)cent + 201) & 0x10000) != 0 )
++                        if ( (cent->clientFlags & 0x10000) != 0 )
+                         {
+                             up[0] = 0.0f;
+                             up[1] = 0.0f;
+@@ -1780,7 +1780,7 @@
+                 {
+                     CG_LinkEntity(localClientNum, cent->nextState.number);
+                 }
+-                if ( ((*((unsigned int *)cent + 201) >> 18) & 1) != 0 )
++                if ( ((cent->clientFlags >> 18) & 1) != 0 )
+                     CG_CompassUpdateVehicleInfo(localClientNum, cent->nextState.number);
+                 CG_ScriptMover(localClientNum, cent);
+                 break;
+@@ -1789,7 +1789,7 @@
+         }
+         if ( CG_EntityNeedsScriptThread(localClientNum, cent) )
+         {
+-            *((unsigned int *)cent + 201) |= 0x100u;
++            cent->clientFlags |= 0x100u;
+             Scr_AddInt(localClientNum, SCRIPTINSTANCE_CLIENT);
+             t = CScr_ExecEntThread(cent, cg_scr_data.entityspawned, 1u);
+             Scr_FreeThread(t, SCRIPTINSTANCE_CLIENT);
+@@ -2228,12 +2228,12 @@
+     eType = cent->nextState.eType;
+     if ( eType < 0x15 )
+     {
+-        *((unsigned int *)cent + 201) |= (unsigned int)0x800000;
++        cent->clientFlags |= (unsigned int)0x800000;
+         if ( contextKey )
+-            v5 = *((_DWORD *)cent + 201) | 0x1000000;
++            v5 = cent->clientFlags | 0x1000000;
+         else
+-            v5 = *((unsigned int *)cent + 201) & 0xFEFFFFFF;
+-        *((unsigned int *)cent + 201) = v5;
++            v5 = cent->clientFlags & 0xFEFFFFFF;
++        cent->clientFlags = v5;
+         if ( eType < 8 || eType > 9 )
+         {
+             if ( CG_ShouldDelayEntityPacketPostPS(localClientNum, cent) )
+@@ -2341,8 +2341,8 @@
+     if ( !centParent )
+         return 0;
+     cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+-    v4 = ((*((unsigned int *)centParent + 201) >> 23) & 1) != 0
+-        && contextKey == ((*((unsigned int *)centParent + 201) & 0x1000000) != 0);
++    v4 = ((centParent->clientFlags >> 23) & 1) != 0
++        && contextKey == ((centParent->clientFlags & 0x1000000) != 0);
+     return !v4 && centParent->nextState.number != cgameGlob->predictedPlayerState.clientNum;
+ }
+ 
+@@ -3215,7 +3215,7 @@
+     {
+         __debugbreak();
+     }
+-    if ( ((*((unsigned int *)cent + 201) >> 21) & 1) != 0 )
++    if ( ((cent->clientFlags >> 21) & 1) != 0 )
+     {
+         if ( cent->pose.ragdollHandle )
+         {
+@@ -3847,7 +3847,7 @@
+     }
+     if ( CG_EntityNeedsScriptThread(localClientNum, cent) )
+     {
+-        *((unsigned int *)cent + 201) |= 0x100u;
++        cent->clientFlags |= 0x100u;
+         Scr_AddInt(localClientNum, SCRIPTINSTANCE_CLIENT);
+         t = CScr_ExecEntThread(cent, cg_scr_data.entityspawned, 1u);
+         Scr_FreeThread(t, SCRIPTINSTANCE_CLIENT);
+@@ -4141,7 +4141,7 @@
+                                 weapDef->projectileModel,
+                                 0);
+             cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+-            if ( ((*((unsigned int *)cent + 201) >> 4) & 1) != 0 )
++            if ( ((cent->clientFlags >> 4) & 1) != 0 )
+             {
+                 if ( cent->lastTrailTime > cgameGlob->time )
+                 {
+@@ -4169,7 +4169,7 @@
+             }
+             else
+             {
+-                *((unsigned int *)cent + 201) |= 0x10u;
++                cent->clientFlags |= 0x10u;
+                 cent->fxTrailHandle = 0;
+                 cent->fxProjExplosion = 0;
+                 if ( weapDef->projTrailEffect )
+@@ -4428,7 +4428,7 @@
+                 Scr_FreeThread(t, SCRIPTINSTANCE_CLIENT);
+             }
+         }
+-        *((unsigned int *)cent + 201) &= ~0x400000u;
++        cent->clientFlags &= ~0x400000u;
+     }
+ }
+ 
+@@ -4651,7 +4651,7 @@
+     }
+     cent->flagIndex |= 1 << flagNum;
+     cent->flagState |= 1 << flagNum;
+-    *((unsigned int *)cent + 201) |= 0x400000u;
++    cent->clientFlags |= 0x400000u;
+ }
+ 
+ void __cdecl CG_ClientFlagClear(centity_s *cent, unsigned int flagNum)
+@@ -4680,7 +4680,7 @@
+     }
+     cent->flagIndex |= 1 << flagNum;
+     cent->flagState &= ~(unsigned __int16)(1 << flagNum);
+-    *((unsigned int *)cent + 201) |= 0x400000u;
++    cent->clientFlags |= 0x400000u;
+ }
+ 
+ bool __cdecl CG_ClientFlagIsActive(const centity_s *cent, unsigned int flagNum)
+--- a/src/cgame_mp/cg_main_mp.cpp
++++ b/src/cgame_mp/cg_main_mp.cpp
+@@ -2536,7 +2536,7 @@
+     cent = CG_GetEntity(localClientNum, entityNum);
+     if ( !cent && !Assert_MyHandler("C:\\projects_pc\\cod\\codsrc\\src\\cgame_mp\\cg_main_mp.cpp", 2544, 0, "%s", "cent") )
+         __debugbreak();
+-    if ( ((*((unsigned int *)cent + 201) >> 1) & 1) == 0 )
++    if ( ((cent->clientFlags >> 1) & 1) == 0 )
+         return 0;
+     *origin = cent->pose.origin[0];
+     origin[1] = cent->pose.origin[1];
+@@ -2577,7 +2577,7 @@
+     cent = CG_GetEntity(localClientNum, entityNum);
+     if ( !cent && !Assert_MyHandler("C:\\projects_pc\\cod\\codsrc\\src\\cgame_mp\\cg_main_mp.cpp", 2576, 0, "%s", "cent") )
+         __debugbreak();
+-    if ( ((*((unsigned int *)cent + 201) >> 1) & 1) == 0 )
++    if ( ((cent->clientFlags >> 1) & 1) == 0 )
+         return 0;
+     info = CG_GetVehicleInfo(cent->nextState.vehicleState.vehicleInfoIndex);
+     if ( !info )
+@@ -3881,7 +3881,7 @@
+ {
+     trigger_info_t *v0; // ecx
+     trigger_info_t *trigger_info; // [esp+14h] [ebp-18h]
+-    unsigned int *other; // [esp+18h] [ebp-14h]
++    centity_s *other;
+     centity_s *ent; // [esp+1Ch] [ebp-10h]
+     int bMoreTriggered; // [esp+20h] [ebp-Ch]
+     int entnum; // [esp+24h] [ebp-8h]
+@@ -3897,10 +3897,10 @@
+         CG_ProcessTriggerDebug(ent, trigger_info);
+         if ( ent->nextState.lerp.useCount == trigger_info->useCount )
+         {
+-            other = (unsigned int *)CG_GetEntity(0, trigger_info->otherEntnum);
+-            if ( other[151] == trigger_info->otherUseCount
+-                && ((*((unsigned int *)ent + 201) >> 1) & 1) != 0
+-                && ((other[201] >> 1) & 1) != 0 )
++            other = CG_GetEntity(0, trigger_info->otherEntnum);
++            if ( other->nextState.lerp.useCount == trigger_info->otherUseCount
++                && ((ent->clientFlags >> 1) & 1) != 0
++                && other->nextValid )
+             {
+                 if ( cg_level.entTriggerIndex[entnum] == cg_level.triggerIndex )
+                 {
+@@ -3926,7 +3926,7 @@
+ {
+     trigger_info_t *trigger_info; // [esp+4h] [ebp-4h]
+ 
+-    if ( ((*((unsigned int *)other + 201) >> 1) & 1) == 0
++    if ( ((other->clientFlags >> 1) & 1) == 0
+         && !Assert_MyHandler(
+                     "C:\\projects_pc\\cod\\codsrc\\src\\cgame_mp\\cg_main_mp.cpp",
+                     3630,
+@@ -3957,13 +3957,13 @@
+ 
+ void __cdecl CG_multi_trigger(centity_s *ent)
+ {
+-    if ( ((*((unsigned int *)ent + 201) >> 17) & 1) != 0 )
++    if ( ((ent->clientFlags >> 17) & 1) != 0 )
+         CG_FreeEntityDelay(ent);
+ }
+ 
+ void __cdecl CG_Touch_Multi(centity_s *self, centity_s *other)
+ {
+-    if ( ((*((unsigned int *)other + 201) >> 1) & 1) != 0 )
++    if ( ((other->clientFlags >> 1) & 1) != 0 )
+     {
+         CG_Trigger(self, other);
+         CG_multi_trigger(other);
+--- a/src/cgame_mp/cg_newDraw_mp.cpp
++++ b/src/cgame_mp/cg_newDraw_mp.cpp
+@@ -3744,7 +3744,7 @@
+         for ( i = 0; i < 32; ++i )
+         {
+             cent = CG_GetEntity(localClientNum, i);
+-            if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0
++            if ( ((cent->clientFlags >> 1) & 1) != 0
+                 && cent->nextState.number != cgameGlob->clientNum
+                 && cent->nextState.eType == 1
+                 && (cent->nextState.lerp.eFlags & 0x40000) == 0 )
+@@ -3840,7 +3840,7 @@
+     if ( ShouldDrawPlayerTargetHighlights(localClientNum, cgameGlob) )
+     {
+         cent = CG_GetEntity(localClientNum, cgameGlob->clientNum);
+-        if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0
++        if ( ((cent->clientFlags >> 1) & 1) != 0
+             && cent->nextState.eType == 1
+             && (cent->nextState.lerp.eFlags & 0x40000) == 0 )
+         {
+@@ -5688,7 +5688,7 @@
+     for ( i = 0; i < 32; ++i )
+     {
+         cent = CG_GetEntity(localClientNum, i);
+-        if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0
++        if ( ((cent->clientFlags >> 1) & 1) != 0
+             && cent->nextState.number != cgameGlob->clientNum
+             && cent->nextState.eType == 1
+             && (cent->nextState.lerp.eFlags & 0x40000) == 0 )
+--- a/src/cgame_mp/cg_players_mp.cpp
++++ b/src/cgame_mp/cg_players_mp.cpp
+@@ -345,7 +345,7 @@
+     if ( (es->lerp.eFlags & 0x10000) == 0 )
+         return 1;
+     pVehicleCEnt = CG_GetEntity(localClientNum, cent->nextState.otherEntityNum);
+-    if ( ((*((unsigned int *)pVehicleCEnt + 201) >> 1) & 1) == 0 )
++    if ( ((pVehicleCEnt->clientFlags >> 1) & 1) == 0 )
+         return 0;
+     vehicleObj = Com_GetClientDObj(pVehicleCEnt->nextState.number, localClientNum);
+     if ( !vehicleObj )
+@@ -473,7 +473,7 @@
+     R_UnmapShaderConstantSet(constantSet, 0);
+     R_UnmapShaderConstantSet(constantSet, 1u);
+     R_UnmapShaderConstantSet(constantSet, 2u);
+-    if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
++    if ( ((cent->clientFlags >> 1) & 1) != 0 )
+     {
+         clientNum = cent->nextState.clientNum;
+         client = &cgameGlob->bgs.clientinfo[clientNum];
+@@ -686,9 +686,9 @@
+                     if (cent->tree)
+                     {
+                         v8 = cg_loadScripts && cg_loadScripts->current.enabled;
+-                        if (v8 && ((*((unsigned int *)cent + 201) >> 8) & 1) == 0)
++                        if (v8 && ((cent->clientFlags >> 8) & 1) == 0)
+                         {
+-                            *((unsigned int *)cent + 201) |= 0x100u;
++                            cent->clientFlags |= 0x100u;
+                             Scr_AddInt(localClientNum, SCRIPTINSTANCE_CLIENT);
+                             t = CScr_ExecEntThread(cent, cg_scr_data.playerspawned, 1u);
+                             Scr_FreeThread(t, SCRIPTINSTANCE_CLIENT);
+@@ -782,7 +782,7 @@
+                         {
+                             lightingOrigin[2] = lightingOrigin[2] + 32.0;
+                         }
+-                        if ( (p_nextState->lerp.eFlags2 & 0x200000) != 0 || ((*((unsigned int *)cent + 201) >> 5) & 1) != 0 )
++                        if ( (p_nextState->lerp.eFlags2 & 0x200000) != 0 || ((cent->clientFlags >> 5) & 1) != 0 )
+                         {
+                             if ( !cent->pose.startBurnTime )
+                                 cent->pose.startBurnTime = CG_GetLocalClientGlobals(localClientNum)->time;
+@@ -988,7 +988,7 @@
+                     if ( (pLerpAnim->animation->flags & 4) != 0 )
+                     {
+                         pTurretCEnt = CG_GetEntity(localClientNum, cent->nextState.otherEntityNum);
+-                        if ( ((*((unsigned int *)pTurretCEnt + 201) >> 1) & 1) != 0 )
++                        if ( ((pTurretCEnt->clientFlags >> 1) & 1) != 0 )
+                         {
+                             turretObj = Com_GetClientDObj(pTurretCEnt->nextState.number, localClientNum);
+                             if ( turretObj )
+@@ -1414,11 +1414,11 @@
+     {
+         __debugbreak();
+     }
+-    if ( (p_nextState->lerp.eFlags & 0x20) == 0 && ((*((unsigned int *)cent + 201) >> 21) & 1) == 0 )
++    if ( (p_nextState->lerp.eFlags & 0x20) == 0 && ((cent->clientFlags >> 21) & 1) == 0 )
+     {
+         if ( CG_EntityNeedsScriptThread(localClientNum, cent) )
+         {
+-            *((unsigned int *)cent + 201) |= 0x100u;
++            cent->clientFlags |= 0x100u;
+             Scr_AddInt(localClientNum, SCRIPTINSTANCE_CLIENT);
+             t = CScr_ExecEntThread(cent, cg_scr_data.entityspawned, 1u);
+             Scr_FreeThread(t, SCRIPTINSTANCE_CLIENT);
+@@ -1459,7 +1459,7 @@
+             {
+                 lightingOrigin[2] = lightingOrigin[2] + 32.0;
+             }
+-            if ( (p_nextState->lerp.eFlags2 & 0x200000) != 0 || ((*((unsigned int *)cent + 201) >> 5) & 1) != 0 )
++            if ( (p_nextState->lerp.eFlags2 & 0x200000) != 0 || ((cent->clientFlags >> 5) & 1) != 0 )
+             {
+                 if ( !cent->pose.startBurnTime )
+                     cent->pose.startBurnTime = CG_GetLocalClientGlobals(localClientNum)->time;
+@@ -1521,7 +1521,7 @@
+     cg_s *cgameGlob; // [esp+4h] [ebp-110h]
+     FxMarkDObjUpdateContext markUpdateContext; // [esp+Ch] [ebp-108h] BYREF
+ 
+-    if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
++    if ( ((cent->clientFlags >> 1) & 1) != 0 )
+     {
+         if ( cent->nextState.clientNum != cent->nextState.number
+             && !Assert_MyHandler(
+--- a/src/cgame_mp/cg_predict_mp.cpp
++++ b/src/cgame_mp/cg_predict_mp.cpp
+@@ -494,7 +494,7 @@
+     {
+         CG_InterpolatePlayerState(localClientNum, 0);
+         centTarget = CG_GetEntity(localClientNum, cgameGlob->followCameraClient);
+-        if ( ((*((unsigned int *)centTarget + 201) >> 1) & 1) != 0 )
++        if ( ((centTarget->clientFlags >> 1) & 1) != 0 )
+         {
+             CL_GetUserCmd(localClientNum, current, &latestCmd);
+             FollowCameraMove(cgameGlob, centTarget, &latestCmd);
+@@ -941,7 +941,7 @@
+         cent = CG_GetEntity(localClientNum, prevSnap->ps.viewlocked_entNum);
+         if ( cent )
+         {
+-            if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
++            if ( ((cent->clientFlags >> 1) & 1) != 0 )
+             {
+                 vehInfo = CG_GetVehicleInfo(cent->nextState.vehicleState.vehicleInfoIndex);
+                 if ( !vehInfo
+--- a/src/cgame_mp/cg_scr_main_mp.cpp
++++ b/src/cgame_mp/cg_scr_main_mp.cpp
+@@ -454,7 +454,7 @@
+             CG_GetFakeEntity(entref.client, entref.entnum);
+     }
+     isBurning = 0;
+-    if ( (pSelf->currentState.eFlags2 & 0x200000) != 0 || ((*((unsigned int *)pSelf + 201) >> 5) & 1) != 0 )
++    if ( (pSelf->currentState.eFlags2 & 0x200000) != 0 || ((pSelf->clientFlags >> 5) & 1) != 0 )
+         isBurning = 1;
+     Scr_AddBool(isBurning, SCRIPTINSTANCE_CLIENT);
+ }
+@@ -1754,7 +1754,7 @@
+         if ( entref.entnum >= 0x400u )
+             CG_GetFakeEntity(entref.client, entref.entnum);
+     }
+-    if ( ((*((unsigned int *)pSelf + 201) >> 1) & 1) == 0 )
++    if ( ((pSelf->clientFlags >> 1) & 1) == 0 )
+         Scr_Error("GetStance can not be used on a player that is not in the snapshot.", 0);
+     if ( pSelf->nextState.eType == 1 || pSelf->nextState.eType == 5 )
+     {
+@@ -1809,7 +1809,7 @@
+         if ( entref.entnum >= 0x400u )
+             CG_GetFakeEntity(entref.client, entref.entnum);
+     }
+-    if ( ((*((unsigned int *)pSelf + 201) >> 1) & 1) != 0 )
++    if ( ((pSelf->clientFlags >> 1) & 1) != 0 )
+     {
+         if ( (unsigned int)Scr_GetNumParam(SCRIPTINSTANCE_CLIENT) >= 2 )
+         {
+@@ -2090,7 +2090,7 @@
+         *(_QWORD *)end = *(_QWORD *)&footMatrix[3][0];
+         end[2] = footMatrix[3][2] - footprintGroundTraceDown;
+         surfType = (CM_TracePointDown(start, end, 2065, 0x3F00000, footMatrix[3], 0, 0) & 0x3F00000) >> 20;
+-        if ( (cent->currentState.eFlags2 & 0x200000) != 0 || ((*((unsigned int *)cent + 201) >> 5) & 1) != 0 )
++        if ( (cent->currentState.eFlags2 & 0x200000) != 0 || ((cent->clientFlags >> 5) & 1) != 0 )
+             Scr_AddInt(1, SCRIPTINSTANCE_CLIENT);
+         else
+             Scr_AddInt(0, SCRIPTINSTANCE_CLIENT);
+--- a/src/cgame_mp/cg_snapshot_mp.cpp
++++ b/src/cgame_mp/cg_snapshot_mp.cpp
+@@ -53,7 +53,7 @@
+         if ( CL_LocalClient_IsFirstActive(localClientNum) )
+         {
+             if ( cent )
+-                v5 = ((*((unsigned int *)cent + 201) >> 8) & 1) != 0;
++                v5 = ((cent->clientFlags >> 8) & 1) != 0;
+             else
+                 v5 = 0;
+         }
+@@ -63,7 +63,7 @@
+         }
+         if ( v5 )
+         {
+-            *((unsigned int *)cent + 201) &= ~0x100u;
++            cent->clientFlags &= ~0x100u;
+             CScr_AddEntity(cent, (unsigned __int16)localClientNum);
+             Scr_AddInt(localClientNum, SCRIPTINSTANCE_CLIENT);
+             t = Scr_ExecThread(SCRIPTINSTANCE_CLIENT, cg_scr_data.entityshutdownCB, 2u);
+@@ -87,7 +87,7 @@
+         cent->currentState.pos.trType = 0;
+         cent->currentState.apos.trType = 0;
+     }
+-    if ( cent->nextState.number >= 1024 && !cent->pose.eType && ((*((unsigned int *)cent + 201) >> 15) & 1) != 0 )
++    if ( cent->nextState.number >= 1024 && !cent->pose.eType && ((cent->clientFlags >> 15) & 1) != 0 )
+     {
+         number = cent->nextState.number;
+         if ( localClientNum
+@@ -198,7 +198,7 @@
+     cent->pose.physUserBody = 0;
+     cent->pose.physUserBodyProneFeet = 0;
+     cent->pose.startBurnTime = 0;
+-    *((unsigned int *)cent + 201) &= ~0x20u;
++    cent->clientFlags &= ~0x20u;
+     if ( cent->destructible )
+     {
+         CG_FreeDestructible(localClientNum, cent->destructible);
+@@ -452,7 +452,7 @@
+             v22 = &cgameGlob->nextSnap->entities[num];
+             entnum = v22->number;
+             cent = CG_GetEntity(localClientNum, entnum);
+-            if ( ((*((unsigned int *)cent + 201) >> 1) & 1) == 0
++            if ( ((cent->clientFlags >> 1) & 1) == 0
+                 && !Assert_MyHandler(
+                             "C:\\projects_pc\\cod\\codsrc\\src\\cgame_mp\\cg_snapshot_mp.cpp",
+                             1117,
+@@ -462,14 +462,14 @@
+             {
+                 __debugbreak();
+             }
+-            *((unsigned int *)cent + 201) &= ~2u;
++            cent->clientFlags &= ~2u;
+             centInPrevSnapshot[entnum >> 5] |= 0x80000000 >> (entnum & 0x1F);
+         }
+         entnum = cgameGlob->nextSnap->ps.clientNum;
+         cent = CG_GetEntity(localClientNum, entnum);
+-        if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
+-        {
+-            *((unsigned int *)cent + 201) &= ~2u;
++        if ( ((cent->clientFlags >> 1) & 1) != 0 )
++        {
++            cent->clientFlags &= ~2u;
+             centInPrevSnapshot[entnum >> 5] |= 0x80000000 >> (entnum & 0x1F);
+         }
+     }
+@@ -594,7 +594,7 @@
+             cent = CG_GetEntity(localClientNum, entnum);
+             cent->nextState.number = (unsigned __int16)entnum;
+             BG_PlayerStateToEntityState(&snap->ps, &cent->nextState, 0, 0);
+-            *((unsigned int *)cent + 201) |= 2u;
++            cent->clientFlags |= 2u;
+             if ( (centInPrevSnapshot[entnum >> 5] & (0x80000000 >> (entnum & 0x1F))) != 0
+                 && cent->nextState.lerp.useCount == cent->currentState.useCount )
+             {
+@@ -613,22 +613,22 @@
+                         if ( Com_IsRagdollTrajectory(&cent->currentState.pos) )
+                         {
+                             if ( Vec3Distance(cent->currentState.pos.trBase, cent->nextState.lerp.pos.trBase) > 128.0 )
+-                                *((unsigned int *)cent + 201) |= 0x200000u;
++                                cent->clientFlags |= 0x200000u;
+                         }
+                         else
+                         {
+-                            *((unsigned int *)cent + 201) |= 0x200000u;
++                            cent->clientFlags |= 0x200000u;
+                         }
+                     }
+                     else
+                     {
+-                        *((unsigned int *)cent + 201) |= 0x200000u;
++                        cent->clientFlags |= 0x200000u;
+                     }
+                 }
+             }
+-            else if ( ((*((unsigned int *)cent + 201) >> 21) & 1) != 0 )
+-            {
+-                *((unsigned int *)cent + 201) &= ~0x200000u;
++            else if ( ((cent->clientFlags >> 21) & 1) != 0 )
++            {
++                cent->clientFlags &= ~0x200000u;
+             }
+             if ( (snap->ps.otherFlags & 2) != 0 )
+             {
+@@ -693,7 +693,7 @@
+             centInPrevSnapshot[(int)cgameGlob->snap->ps.clientNum >> 5] &= ~(0x80000000 >> (cgameGlob->snap->ps.clientNum
+                                                                                                                                                                         & 0x1F));
+             CG_ResetEntity(localClientNum, cent, 1);
+-            *((unsigned int *)cent + 201) &= ~0x200000u;
++            cent->clientFlags &= ~0x200000u;
+         }
+         else if ( cgameGlob->mapRestart
+                      || (!Demo_IsPlaying() || snap->ps.stats[4] == 14) && snap->ps.stats[4] != cgameGlob->snap->ps.stats[4]
+@@ -709,7 +709,7 @@
+             entnum = v22->number;
+             cent = CG_GetEntity(localClientNum, entnum);
+             memcpy(&cent->nextState, v22, sizeof(cent->nextState));
+-            if ( !Demo_IsPlaying() && ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
++            if ( !Demo_IsPlaying() && ((cent->clientFlags >> 1) & 1) != 0 )
+             {
+                 v4 = va(
+                              "entnum %d num %d numEntities %d clientNum %d flags 0x%x",
+@@ -727,7 +727,7 @@
+                                 v4) )
+                     __debugbreak();
+             }
+-            *((unsigned int *)cent + 201) |= 2u;
++            cent->clientFlags |= 2u;
+             if ( Com_IsRagdollTrajectory(&cent->nextState.lerp.pos) )
+             {
+                 if ( bWasDemoJump )
+@@ -737,22 +737,22 @@
+                         if ( Com_IsRagdollTrajectory(&cent->currentState.pos) )
+                         {
+                             if ( Vec3Distance(cent->currentState.pos.trBase, cent->nextState.lerp.pos.trBase) > 128.0 )
+-                                *((unsigned int *)cent + 201) |= 0x200000u;
++                                cent->clientFlags |= 0x200000u;
+                         }
+                         else
+                         {
+-                            *((unsigned int *)cent + 201) |= 0x200000u;
++                            cent->clientFlags |= 0x200000u;
+                         }
+                     }
+                     else
+                     {
+-                        *((unsigned int *)cent + 201) |= 0x200000u;
++                        cent->clientFlags |= 0x200000u;
+                     }
+                 }
+             }
+-            else if ( ((*((unsigned int *)cent + 201) >> 21) & 1) != 0 )
+-            {
+-                *((unsigned int *)cent + 201) &= ~0x200000u;
++            else if ( ((cent->clientFlags >> 21) & 1) != 0 )
++            {
++                cent->clientFlags &= ~0x200000u;
+             }
+             oldEFlags2 = cent->currentState.eFlags2;
+             if ( (centInPrevSnapshot[entnum >> 5] & (0x80000000 >> (entnum & 0x1F))) != 0 )
+@@ -947,8 +947,8 @@
+         CG_SafeDObjFree(localClientNum, cent->nextState.number);
+     AimAssist_ClearEntityReference(localClientNum, cent->nextState.number);
+     memcpy(&cent->currentState, &cent->nextState.lerp, sizeof(cent->currentState));
+-    *((_DWORD *)cent + 201) &= ~0x10u;
+-    *((_DWORD *)cent + 201) &= ~0x800000u;
++    cent->clientFlags &= ~0x10u;
++    cent->clientFlags &= ~0x800000u;
+     cent->pose.cullIn = 0;
+     cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+     BG_EvaluateTrajectory(&cent->nextState.lerp.pos, cgameGlob->time, cent->pose.origin);
+@@ -1049,7 +1049,7 @@
+         cent->miscTime = cgameGlob->time;
+         if ((cent->nextState.lerp.eFlags & 0x10) != 0)
+         {
+-            *((_DWORD *)cent + 201) |= 0x100u;
++            cent->clientFlags |= 0x100u;
+             Entity = CG_GetEntity(localClientNum, cent->nextState.clientNum);
+             CScr_AddEntity(Entity, localClientNum);
+             Scr_AddInt(localClientNum, SCRIPTINSTANCE_CLIENT);
+@@ -1306,7 +1306,7 @@
+         else
+         {
+             Entity = CG_GetEntity(localClientNum, newKillCamEntity);
+-            if ( ((*((unsigned int *)Entity + 201) >> 1) & 1) != 0 )
++            if ( ((Entity->clientFlags >> 1) & 1) != 0 )
+             {
+                 cgameGlob->killCamLastEntityNum = newKillCamEntity;
+                 cgameGlob->invalidKillCamEntity = 1023;
+@@ -1548,7 +1548,7 @@
+     {
+         __debugbreak();
+     }
+-    if ( ((*((unsigned int *)cent + 201) >> 22) & 1) == 0 )
++    if ( ((cent->clientFlags >> 22) & 1) == 0 )
+         CG_ClientFlagResetAll(cent);
+     if ( newEnt )
+     {
+--- a/src/cgame_mp/cg_vehicles_mp.cpp
++++ b/src/cgame_mp/cg_vehicles_mp.cpp
+@@ -10,7 +10,7 @@
+ {
+     const cgs_t *cgs; // [esp+4h] [ebp-8h]
+ 
+-    if ( ((*((unsigned int *)centVeh + 201) >> 1) & 1) == 0
++    if ( ((centVeh->clientFlags >> 1) & 1) == 0
+         && !Assert_MyHandler(
+                     "C:\\projects_pc\\cod\\codsrc\\src\\cgame_mp\\cg_vehicles_mp.cpp",
+                     60,
+@@ -214,7 +214,7 @@
+     }
+     if ( centVeh->nextState.eType == 14 )
+     {
+-        if ( ((*((unsigned int *)centVeh + 201) >> 1) & 1) != 0 )
++        if ( ((centVeh->clientFlags >> 1) & 1) != 0 )
+         {
+             objVeh = GetVehicleEntDObj(localClientNum, centVeh);
+             if ( objVeh )
+--- a/src/cgame_mp/cg_view_mp.cpp
++++ b/src/cgame_mp/cg_view_mp.cpp
+@@ -1021,7 +1021,7 @@
+         __debugbreak();
+     }
+     if ( cgameGlob->killCamEntity == 1023
+-        || (cent = CG_GetEntity(localClientNum, cgameGlob->killCamEntity), ((*((unsigned int *)cent + 201) >> 1) & 1) == 0)
++        || (cent = CG_GetEntity(localClientNum, cgameGlob->killCamEntity), ((cent->clientFlags >> 1) & 1) == 0)
+         || cent == (centity_s *)-108 )
+     {
+         *origin = cgameGlob->killCamLastEntityOrg[0];
+@@ -1227,7 +1227,7 @@
+     if ( cgameGlob->killCamEntity != 1023 )
+     {
+         cent = CG_GetEntity(localClientNum, cgameGlob->killCamEntity);
+-        if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
++        if ( ((cent->clientFlags >> 1) & 1) != 0 )
+             vehicleInfoIndex = cent->nextState.vehicleState.vehicleInfoIndex;
+     }
+     info = CG_GetVehicleInfo(vehicleInfoIndex);
+@@ -1976,7 +1976,7 @@
+             if ( cgameGlob->killCamEntity != 1023 && cgameGlob->killCamFirstFrameRan )
+             {
+                 cent = CG_GetEntity(localClientNum, cgameGlob->killCamEntity);
+-                if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 && cgameGlob->frametime > 0 )
++                if ( ((cent->clientFlags >> 1) & 1) != 0 && cgameGlob->frametime > 0 )
+                 {
+                     entityVel[0] = cent->pose.origin[0] - cgameGlob->killCamPrevBombOrigin[0];
+                     entityVel[1] = cent->pose.origin[1] - cgameGlob->killCamPrevBombOrigin[1];
+@@ -2703,7 +2703,7 @@
+                 CG_GetEntity(localClientNum,
+                     cgameGlob->predictedPlayerState.corpseIndex + 32);
+ 
+-            if (((*((_DWORD *)cent + 201) >> 1) & 1) != 0)
++            if (((cent->clientFlags >> 1) & 1) != 0)
+             {
+                 DObj *obj = Com_GetClientDObj(cent->nextState.number, localClientNum);
+                 if (obj)
+@@ -3779,7 +3779,7 @@
+     if ( (cgameGlob->nextSnap->ps.eFlags & 0x4000) != 0 && (cgameGlob->nextSnap->ps.otherFlags & 2) == 0 )
+     {
+         cent = CG_GetEntity(localClientNum, cgameGlob->nextSnap->ps.viewlocked_entNum);
+-        if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
++        if ( ((cent->clientFlags >> 1) & 1) != 0 )
+         {
+             if ( CG_GetVehicleInfo(cent->nextState.vehicleState.vehicleInfoIndex)->remoteControl )
+                 cgameGlob->renderingThirdPerson = TP_FOR_MODEL;
+@@ -3955,7 +3955,7 @@
+ 
+     cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+     vehicle = CG_GetEntity(localClientNum, cgameGlob->nextSnap->ps.viewlocked_entNum);
+-    if ( ((*((unsigned int *)vehicle + 201) >> 1) & 1) != 0 )
++    if ( ((vehicle->clientFlags >> 1) & 1) != 0 )
+     {
+         Vec3Lerp(
+             vehicle->currentState.pos.trBase,
+@@ -4679,7 +4679,7 @@
+             __debugbreak();
+         }
+         cent = CG_GetEntity(localClientNum, cgameGlob->killCamLastEntityNum);
+-        if ( ((*((unsigned int *)cent + 201) >> 1) & 1) == 0
++        if ( ((cent->clientFlags >> 1) & 1) == 0
+             && !Assert_MyHandler(
+                         "C:\\projects_pc\\cod\\codsrc\\src\\cgame_mp\\cg_view_mp.cpp",
+                         2534,
+@@ -4727,7 +4727,7 @@
+     if ( cgameGlob->killCamLookAtEntity != 1023 )
+     {
+         centTarget = CG_GetEntity(localClientNum, cgameGlob->killCamLookAtEntity);
+-        if ( ((*((unsigned int *)centTarget + 201) >> 1) & 1) != 0 )
++        if ( ((centTarget->clientFlags >> 1) & 1) != 0 )
+         {
+             if ( centTarget->pose.eType != 1
+                 && !Assert_MyHandler(
+--- a/src/client_mp/cl_cgame_mp.cpp
++++ b/src/client_mp/cl_cgame_mp.cpp
+@@ -1226,7 +1226,7 @@
+     for ( entnum = 0; entnum < 1024; ++entnum )
+     {
+         cent = CG_GetEntity(localClientNum, entnum);
+-        *((unsigned int *)cent + 201) &= ~2u;
++        cent->clientFlags &= ~2u;
+         CG_ShutdownEntity(localClientNum, cent, 1);
+     }
+     CG_ShutdownEntity(localClientNum, &cgameGlob->predictedPlayerEntity, 1);
+--- a/src/demo/demo_playback.cpp
++++ b/src/demo/demo_playback.cpp
+@@ -394,7 +394,7 @@
+         for ( i = 0; i < demo.header.maxClients; ++i )
+         {
+             cent = CG_GetEntity(localClientNum, i);
+-            if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 && i != cgameGlob->clientNum )
++            if ( ((cent->clientFlags >> 1) & 1) != 0 && i != cgameGlob->clientNum )
+             {
+                 if ( CG_CanSeeFriendlyHead(localClientNum, cent) )
+                 {
+--- a/src/flame/flame_system.cpp
++++ b/src/flame/flame_system.cpp
+@@ -1837,7 +1837,7 @@
+                     cent = CG_GetEntity(localClientNum, i);
+                     centForFlags = cent;
+                     usingVehicleTagFlash = 0;
+-                    if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
++                    if ( ((cent->clientFlags >> 1) & 1) != 0 )
+                     {
+                         weapDef = BG_GetWeaponDef(cent->nextState.weapon);
+                         if ( cent->nextState.eType == 14 )
+@@ -1904,10 +1904,10 @@
+                                                 && cgameGlob->predictedPlayerState.waterlevel < 3
+                                                 || isFireEvent;
+                                 if ( isFiring )
+-                                    *((unsigned int *)cent + 201) |= 4u;
++                                    cent->clientFlags |= 4u;
+                                 if ( isFiring && isFirstPerson && cent->lastMuzzleFlash < cgameGlob->time - weapDef->iRechamberBoltTime )
+                                 {
+-                                    *((unsigned int *)cent + 201) |= 4u;
++                                    cent->clientFlags |= 4u;
+                                     cent->lastMuzzleFlash = cgameGlob->time;
+                                 }
+                                 if ( isFiring )
+--- a/src/ik/ik_import.cpp
++++ b/src/ik/ik_import.cpp
+@@ -768,7 +768,7 @@
+         }
+         if ( !cent )
+             return 0;
+-        if ( ((*((unsigned int *)cent + 201) >> 1) & 1) == 0 )
++        if ( ((cent->clientFlags >> 1) & 1) == 0 )
+             return 0;
+         if ( cent->pose.isRagdoll )
+             return 0;
+@@ -874,7 +874,7 @@
+     {
+         LocalClientIndex = IKImport_GetLocalClientIndex(ikState);
+         cent = CG_GetEntity(LocalClientIndex, entityNum);
+-        if ( ((*((unsigned int *)cent + 201) >> 1) & 1) == 0 )
++        if ( ((cent->clientFlags >> 1) & 1) == 0 )
+             return 0;
+         if ( (cent->nextState.lerp.eFlags & 0x4C000) != 0 )
+             return 0;
+@@ -888,7 +888,7 @@
+             groundEntityNum = cent->nextState.groundEntityNum;
+             v3 = IKImport_GetLocalClientIndex(ikState);
+             centGround = CG_GetEntity(v3, groundEntityNum);
+-            if ( ((*((unsigned int *)centGround + 201) >> 1) & 1) == 0 )
++            if ( ((centGround->clientFlags >> 1) & 1) == 0 )
+                 return 0;
+             v5 = centGround->nextState.eType;
+             if ( v5 == 6 || v5 == 14 )
+@@ -923,7 +923,7 @@
+         __debugbreak();
+     }
+     cent = CG_GetEntity((char)obj[112], entityNum);
+-    if ( ((*((unsigned int *)cent + 201) >> 1) & 1) == 0 )
++    if ( ((cent->clientFlags >> 1) & 1) == 0 )
+         return 0;
+     if ( IKImport_GetVar_IK_Left_Hand_Lerp_Test() )
+         return 1;
+@@ -936,7 +936,7 @@
+     {
+         return 0;
+     }
+-    return (cent->nextState.lerp.eFlags & 0x40000) == 0 && (*((unsigned int *)cent + 201) & 1) != 0;
++    return (cent->nextState.lerp.eFlags & 0x40000) == 0 && (cent->clientFlags & 1) != 0;
+ }
+ 
+ bool __cdecl IKImport_ApplyRightHandIK(IKState *ikState)
+@@ -2344,7 +2344,7 @@
+         entityNum = ikState->entityNum;
+         LocalClientIndex = IKImport_GetLocalClientIndex(ikState);
+         cent = CG_GetEntity(LocalClientIndex, entityNum);
+-        if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
++        if ( ((cent->clientFlags >> 1) & 1) != 0 )
+         {
+             v4 = IKImport_GetLocalClientIndex(ikState);
+             cgameGlob = CG_GetLocalClientGlobals(v4);
+--- a/src/physics/phys_main.cpp
++++ b/src/physics/phys_main.cpp
+@@ -2424,7 +2424,7 @@
+                 ClientDObj = Com_GetClientDObj(v43[j], v32);
+                 if ( ClientDObj )
+                 {
+-                    if ( ((*((unsigned int *)Entity + 201) >> 15) & 1) != 0 )
++                    if ( ((Entity->clientFlags >> 15) & 1) != 0 )
+                         v26 = (const float *)v44;
+                     else
+                         v26 = (const float *)v45;
+@@ -2434,7 +2434,7 @@
+                 }
+                 else if (Entity->nextState.solid == 0xFFFFFF)
+                 {
+-                    if ( ((*((unsigned int *)Entity + 201) >> 15) & 1) != 0 )
++                    if ( ((Entity->clientFlags >> 15) & 1) != 0 )
+                         v25 = (const float *)v44;
+                     else
+                         v25 = (const float *)v45;
+--- a/src/physics/rope.cpp
++++ b/src/physics/rope.cpp
+@@ -830,7 +830,7 @@
+                 return;
+             case ROPE_CENTITY_CONSTRAINT:
+                 cent = CG_GetEntity(0, constraint->entity_index);
+-                if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 )
++                if ( ((cent->clientFlags >> 1) & 1) != 0 )
+                 {
+                     if ( !constraint->bone_name_hash )
+                     {
+--- a/src/physics/xdoll.cpp
++++ b/src/physics/xdoll.cpp
+@@ -159,7 +159,7 @@
+             {
+                 cent = CG_GetEntity(body->client_index, body->entity_index);
+                 obj = Com_GetClientDObj(body->entity_index, body->client_index);
+-                if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 && cent->destructible && obj )
++                if ( ((cent->clientFlags >> 1) & 1) != 0 && cent->destructible && obj )
+                 {
+                     if ( body->userBodyBoneHash )
+                     {
+--- a/src/ragdoll/ragdoll_update.cpp
++++ b/src/ragdoll/ragdoll_update.cpp
+@@ -1023,9 +1023,9 @@
+     if ( bone->rigidBody )
+     {
+         userData = (PhysObjUserData *)bone->rigidBody;
+-        if ( ((*((unsigned int *)cent + 201) >> 19) & 1) != 0 )
++        if ( ((cent->clientFlags >> 19) & 1) != 0 )
+             userData->m_flags |= 4u;
+-        if ( ((*((unsigned int *)cent + 201) >> 20) & 1) != 0 )
++        if ( ((cent->clientFlags >> 20) & 1) != 0 )
+             userData->m_flags |= 0x10u;
+         userData->m_flags |= 0x20u;
+         return 1;
+--- a/src/ui/ui_viewer.cpp
++++ b/src/ui/ui_viewer.cpp
+@@ -794,7 +794,7 @@
+             memset(&pml, 0, sizeof(pml));
+             pml.msec = (int)(float)(deltaTime * 1000.0);
+             PM_Weapon(&this->pmove, &pml);
+-            v6 = (unsigned int *)((char *)UIViewer::GetPlayerEntity() + 804);
++            v6 = &UIViewer::GetPlayerEntity()->clientFlags;
+             *v6 |= 2u;
+             UIViewer::GetPlayerEntity()->nextState.eType = ET_PLAYER;
+             UIViewer::GetPlayerEntity()->nextState.animState.state = this->ps.legsAnim;
+@@ -1367,7 +1367,7 @@
+         WeaponIndexForName = BG_GetWeaponIndexForName((char *)weaponVariantDef->szInternalName, 0);
+         AssignToSmallerType<unsigned short>(&this->ps.weapon, WeaponIndexForName);
+         UIViewer::GetPlayerEntity()->nextState.weapon = this->ps.weapon;
+-        v3 = (unsigned int *)((char *)UIViewer::GetPlayerEntity() + 804);
++        v3 = &UIViewer::GetPlayerEntity()->clientFlags;
+         *v3 |= 2u;
+         UIViewer::GetPlayerEntity()->nextState.eType = ET_PLAYER;
+         BG_SetConditionBit(0, 1, weaponVariantDef->weapDef->weapClass);
+--- a/src/universal/com_expressions_eval.cpp
++++ b/src/universal/com_expressions_eval.cpp
+@@ -7427,7 +7427,7 @@
+             if ( clientInfo->team == team )
+             {
+                 cent = CG_GetEntity(localClientNum, i);
+-                if ( ((*((unsigned int *)cent + 201) >> 1) & 1) != 0 && (cent->nextState.lerp.eFlags2 & 1) != 0 )
++                if ( ((cent->clientFlags >> 1) & 1) != 0 && (cent->nextState.lerp.eFlags2 & 1) != 0 )
+                 {
+                     CL_GetClientName(localClientNum, i, clientName, 38, 0);
+                     result.internals.intVal = (int)CopyTempString(clientName);
