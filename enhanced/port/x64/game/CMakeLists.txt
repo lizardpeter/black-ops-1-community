@@ -3,6 +3,7 @@ set(upstream_cmake "${kisakblack_source}/CMakeLists.txt")
 set(engine_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/physics.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/fastfile.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/raw-file.patch"
 )
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${upstream_cmake}" ${engine_patches})
 find_package(Git REQUIRED)
@@ -11,17 +12,18 @@ find_package(Git REQUIRED)
 file(REMOVE_RECURSE "${bo1_engine_source}")
 file(COPY "${kisakblack_source}/src" "${kisakblack_source}/tl" "${kisakblack_source}/DemonWare"
     DESTINATION "${bo1_engine_source}")
-execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E env "GIT_CEILING_DIRECTORIES=${CMAKE_BINARY_DIR}"
-        "${GIT_EXECUTABLE}" apply --ignore-space-change ${engine_patches}
-    WORKING_DIRECTORY "${bo1_engine_source}"
-    RESULT_VARIABLE patch_result
-    ERROR_VARIABLE patch_error
-)
-if(NOT patch_result EQUAL 0)
-    message(FATAL_ERROR "Cannot apply the x64 engine patch:
-${patch_error}")
-endif()
+foreach(engine_patch IN LISTS engine_patches)
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env "GIT_CEILING_DIRECTORIES=${CMAKE_BINARY_DIR}"
+            "${GIT_EXECUTABLE}" apply --ignore-space-change "${engine_patch}"
+        WORKING_DIRECTORY "${bo1_engine_source}"
+        RESULT_VARIABLE patch_result
+        ERROR_VARIABLE patch_error
+    )
+    if(NOT patch_result EQUAL 0)
+        message(FATAL_ERROR "Cannot apply ${engine_patch}:\n${patch_error}")
+    endif()
+endforeach()
 file(READ "${upstream_cmake}" engine_cmake)
 
 # The upstream build describes a Win32 executable. Adjust architecture-specific

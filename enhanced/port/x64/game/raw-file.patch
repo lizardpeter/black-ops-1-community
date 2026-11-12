@@ -1,0 +1,301 @@
+--- a/src/database/db_stream.cpp
++++ b/src/database/db_stream.cpp
+@@ -1,6 +1,9 @@
+ #include "db_stream.h"
+ #include <cstdint>
+ #include <universal/assertive.h>
++#include <enhanced/port/x64/fastfile_reference.h>
++#include <qcommon/common.h>
++#include <unordered_map>
+ 
+ XBlock *g_streamBlocks;
+ unsigned __int8 *g_streamPos;
+@@ -11,10 +14,53 @@
+ 
+ StreamPosInfo g_streamPosStack[64];
+ 
++namespace
++{
++std::unordered_map<const unsigned char *, RawFile *> rawFileAliases;
++}
++
++unsigned char *DB_GetNativeStreamSpan(int alignment, unsigned int size)
++{
++    auto *data = DB_AllocStreamPos(alignment);
++    const auto &block = g_streamBlocks[g_streamPosIndex];
++    const auto base = reinterpret_cast<std::uintptr_t>(block.data);
++    const auto address = reinterpret_cast<std::uintptr_t>(data);
++    if (!block.data || address < base || address - base > block.size ||
++        size > block.size - (address - base))
++    {
++        Com_Error(ERR_DROP, "Fastfile read exceeds stream block %u", g_streamPosIndex);
++        return nullptr;
++    }
++    return data;
++}
++
++void DB_RecordRawFileAlias(const unsigned char *slot, RawFile *asset)
++{
++    rawFileAliases.insert_or_assign(slot, asset);
++}
++
++RawFile *DB_FindRawFileAlias(std::uint32_t encoded)
++{
++    const auto reference = bo1::DecodeFastfileReference(encoded);
++    if (reference.kind == bo1::ReferenceKind::blockOffset)
++    {
++        const auto &block = g_streamBlocks[reference.block];
++        if (block.data && reference.offset < block.size)
++        {
++            const auto entry = rawFileAliases.find(block.data + reference.offset);
++            if (entry != rawFileAliases.end())
++                return entry->second;
++        }
++    }
++    Com_Error(ERR_DROP, "Unresolved RawFile alias 0x%08x", encoded);
++    return nullptr;
++}
++
+ void __cdecl DB_InitStreams(XBlock *blocks)
+ {
+     int i; // [esp+0h] [ebp-4h]
+ 
++    rawFileAliases.clear();
+     g_streamBlocks = blocks;
+     g_streamPos = blocks->data;
+     g_streamPosIndex = 0;
+--- a/src/database/db_stream.h
++++ b/src/database/db_stream.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ #include "db_registry.h"
++#include <cstdint>
+ 
+ struct StreamPosInfo // sizeof=0x8
+ {                                       // XREF: .data:g_streamPosStack/r
+@@ -15,6 +16,9 @@
+ unsigned __int8 *__cdecl DB_AllocStreamPos(int alignment);
+ void __cdecl DB_IncStreamPos(int size);
+ const void **__cdecl DB_InsertPointer();
++unsigned char *DB_GetNativeStreamSpan(int alignment, unsigned int size);
++void DB_RecordRawFileAlias(const unsigned char *slot, RawFile *asset);
++RawFile *DB_FindRawFileAlias(std::uint32_t encoded);
+ 
+ 
+ extern XBlock *g_streamBlocks;
+--- a/src/database/db_load.cpp
++++ b/src/database/db_load.cpp
+@@ -30,6 +30,9 @@
+ #include <bgame/bg_emblems.h>
+ #include <stringed/stringed_hooks.h>
+ #include <cgame/cg_effects_load_obj.h>
++#include <enhanced/port/x64/fastfile_reference.h>
++#include <qcommon/common.h>
++#include <cstring>
+ #include <qcommon/cm_load_obj.h>
+ #include <game/g_bsp.h>
+ #include <qcommon/cm_staticmodel.h>
+@@ -7340,47 +7343,110 @@
+ 
+ void __cdecl Load_RawFile(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varRawFile, 12);
+-    DB_PushStreamPos(4u);
+-    varXString = &varRawFile->name;
+-    Load_XString(0);
+-    if ( varRawFile->buffer )
+-    {
+-        varRawFile->buffer = (const char *)AllocLoad_raw_byte();
+-        varConstChar = varRawFile->buffer;
+-        Load_ConstCharArray(1, varRawFile->len + 1);
++    if (!atStreamStart)
++    {
++        Com_Error(ERR_DROP, "RawFile header must be read from the fastfile stream");
++        return;
++    }
++    struct DiskRawFile
++    {
++        std::uint32_t name;
++        std::int32_t length;
++        std::uint32_t buffer;
++    };
++    static_assert(sizeof(DiskRawFile) == 12);
++    DiskRawFile disk{};
++    auto *header = DB_GetNativeStreamSpan(3, sizeof(disk));
++    Load_Stream(true, header, sizeof(disk));
++    std::memcpy(&disk, header, sizeof(disk));
++    if (disk.length < 0 || disk.length == INT32_MAX)
++    {
++        Com_Error(ERR_DROP, "Invalid RawFile payload length");
++        return;
++    }
++    varRawFile->len = disk.length;
++    DB_PushStreamPos(4);
++    const auto name = bo1::DecodeFastfileReference(disk.name);
++    if (name.kind == bo1::ReferenceKind::inlineData)
++    {
++        varRawFile->name = reinterpret_cast<const char *>(DB_GetNativeStreamSpan(0, 1));
++        unsigned char *character;
++        do
++        {
++            character = DB_GetNativeStreamSpan(0, 1);
++            Load_Stream(true, character, 1);
++        }
++        while (*character);
++    }
++    else if (name.kind == bo1::ReferenceKind::blockOffset)
++    {
++        const auto &block = g_streamBlocks[name.block];
++        if (block.data && name.offset < block.size &&
++            std::memchr(block.data + name.offset, 0, block.size - name.offset))
++            varRawFile->name = reinterpret_cast<const char *>(block.data + name.offset);
++    }
++    if (!varRawFile->name)
++    {
++        Com_Error(ERR_DROP, "Invalid RawFile name reference");
++        DB_PopStreamPos();
++        return;
++    }
++    varRawFile->buffer = nullptr;
++    if (disk.buffer)
++    {
++        const int bytes = disk.length + 1;
++        auto *payload = DB_GetNativeStreamSpan(0, bytes);
++        Load_Stream(true, payload, bytes);
++        varRawFile->buffer = reinterpret_cast<const char *>(payload);
+     }
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_RawFilePtr(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varRawFilePtr, 4);
++    std::uint32_t encoded;
++    const unsigned char *sourceSlot = nullptr;
++    if (atStreamStart)
++    {
++        auto *slot = DB_GetNativeStreamSpan(3, sizeof(encoded));
++        Load_Stream(true, slot, sizeof(encoded));
++        std::memcpy(&encoded, slot, sizeof(encoded));
++        sourceSlot = slot;
++    }
++    else
++    {
++        encoded = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(*varRawFilePtr));
++    }
+     DB_PushStreamPos(0);
+-    if ( *varRawFilePtr )
+-    {
+-        value = (unsigned int)*varRawFilePtr;
+-        if ( *varRawFilePtr == (RawFile *)-1 || value == -2 )
+-        {
+-            *varRawFilePtr = (RawFile *)AllocLoad_FxElemVisStateSample();
+-            varRawFile = *varRawFilePtr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_RawFile(1);
+-            Load_RawFileAsset((XAssetHeader *)varRawFilePtr);
+-            if ( inserted )
+-                *inserted = *varRawFilePtr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varRawFilePtr);
+-        }
+-    }
++    *varRawFilePtr = nullptr;
++    const auto reference = bo1::DecodeFastfileReference(encoded);
++    if (reference.kind == bo1::ReferenceKind::inlineData ||
++        reference.kind == bo1::ReferenceKind::inlineWithFixup)
++    {
++        const unsigned char *fixupSlot = nullptr;
++        if (reference.kind == bo1::ReferenceKind::inlineWithFixup)
++        {
++            DB_PushStreamPos(4);
++            fixupSlot = DB_GetNativeStreamSpan(3, sizeof(encoded));
++            DB_IncStreamPos(sizeof(encoded));
++            DB_PopStreamPos();
++        }
++        RawFile loaded{};
++        varRawFile = &loaded;
++        Load_RawFile(true);
++        XAssetHeader asset(&loaded);
++        Load_RawFileAsset(&asset);
++        *varRawFilePtr = asset.rawfile;
++        varRawFile = asset.rawfile;
++        if (fixupSlot)
++            DB_RecordRawFileAlias(fixupSlot, asset.rawfile);
++    }
++    else if (reference.kind != bo1::ReferenceKind::absent)
++    {
++        *varRawFilePtr = DB_FindRawFileAlias(encoded);
++    }
++    if (sourceSlot)
++        DB_RecordRawFileAlias(sourceSlot, *varRawFilePtr);
+     DB_PopStreamPos();
+ }
+ 
+--- a/src/database/db_registry.cpp
++++ b/src/database/db_registry.cpp
+@@ -1807,7 +1807,7 @@
+     DB_CloneXAssetInternal(&asset, &newEntry->asset);
+     hash = DB_HashForName(name, type);
+     newEntry->nextHash = db_hashTable[hash % 0x8000u];
+-    db_hashTable[hash % 0x8000u] = ((char *)newEntry - (char *)g_assetEntryPool) >> 4;
++    db_hashTable[hash % 0x8000u] = static_cast<unsigned __int16>(reinterpret_cast<XAssetEntryPoolEntry *>(newEntry) - g_assetEntryPool);
+     String = SL_GetString((char*)name, 4u, SCRIPTINSTANCE_SERVER);
+     v4 = SL_ConvertToString(String, SCRIPTINSTANCE_SERVER);
+     DB_SetXAssetName(&newEntry->asset, v4);
+@@ -1843,7 +1843,7 @@
+     }
+     if ( ++XAssetEntryHighCount > XAssetEntryHighWaterMark )
+         XAssetEntryHighWaterMark = XAssetEntryHighCount;
+-    g_freeAssetEntryHead = (XAssetEntryPoolEntry *)freeHead->entry.asset.type;
++    g_freeAssetEntryHead = freeHead->next;
+     freeHead->entry.asset.type = type;
+     freeHead->entry.asset.header = DB_AllocXAssetHeader(type);
+     freeHead->entry.zoneIndex = zoneIndex;
+@@ -2414,7 +2414,7 @@
+             }
+         }
+         newEntry->nextHash = db_hashTable[hash % 0x8000];
+-        db_hashTable[hash % 0x8000] = ((char *)newEntry - (char *)g_assetEntryPool) >> 4;
++        db_hashTable[hash % 0x8000] = static_cast<unsigned __int16>(reinterpret_cast<XAssetEntryPoolEntry *>(newEntry) - g_assetEntryPool);
+         if ( db_xassetdebug->current.enabled )
+         {
+             if ( db_xassetdebugtype->current.integer == -1
+@@ -2482,7 +2482,7 @@
+                 }
+             }
+             newEntry->nextOverride = *pOverrideAssetEntryIndex;
+-            *pOverrideAssetEntryIndex = ((char *)newEntry - (char *)g_assetEntryPool) >> 4;
++            *pOverrideAssetEntryIndex = static_cast<unsigned __int16>(reinterpret_cast<XAssetEntryPoolEntry *>(newEntry) - g_assetEntryPool);
+             return existingEntrya;
+         }
+         goto LABEL_106;
+@@ -2556,7 +2556,7 @@
+                 }
+             }
+             newEntry->nextOverride = existingEntrya->entry.nextOverride;
+-            existingEntrya->entry.nextOverride = ((char *)newEntry - (char *)g_assetEntryPool) >> 4;
++            existingEntrya->entry.nextOverride = static_cast<unsigned __int16>(reinterpret_cast<XAssetEntryPoolEntry *>(newEntry) - g_assetEntryPool);
+             DB_SwapXAsset(&newEntry->asset, &existingEntrya->entry.asset);
+             zoneIndex = existingEntrya->entry.zoneIndex;
+             existingEntrya->entry.zoneIndex = newEntry->zoneIndex;
+--- a/src/database/db_file_load.cpp
++++ b/src/database/db_file_load.cpp
+@@ -630,6 +630,9 @@
+         skipShaderCreationHack = i == skipLoadingMaterialsHack;
+         varXAsset = &asset;
+         Load_XAsset(false);
++        if (asset.type == ASSET_TYPE_RAWFILE)
++            DB_RecordRawFileAlias(serialized + sizeof(disk) * i + offsetof(FastfileAsset, header),
++                                  asset.header.rawfile);
+         if (g_load.abort)
+             break;
+     }
