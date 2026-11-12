@@ -13,6 +13,7 @@ set(engine_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/table-assets.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/named-assets.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/world-font.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ddl-emblems.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/optional-vpx.patch"
 )
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${upstream_cmake}" ${engine_patches})

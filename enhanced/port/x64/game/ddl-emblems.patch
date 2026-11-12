@@ -1,0 +1,387 @@
+--- a/src/database/db_load.cpp
++++ b/src/database/db_load.cpp
+@@ -1393,7 +1393,7 @@
+             T loaded{};
+             current = &loaded;
+             load(true);
+-            if (loaded.*name)
++            if (!name || loaded.*name)
+             {
+                 XAssetHeader asset(&loaded);
+                 registerAsset(&asset);
+@@ -7801,72 +7801,130 @@
+     }
+ }
+ 
++namespace
++{
++struct DiskArrayRef
++{
++    std::int32_t count;
++    std::uint32_t present;
++};
++
++template <typename Native, typename Disk, typename Decode>
++Native *ReadNativeAssetArray(DiskArrayRef ref, Decode decode)
++{
++    if (ref.count < 0)
++    {
++        Com_Error(ERR_DROP, "Negative fastfile array count");
++        return nullptr;
++    }
++    if (!ref.present || !ref.count)
++        return nullptr;
++    const auto count = static_cast<unsigned int>(ref.count);
++    const auto *records = ReadTableRecords<Disk>(count);
++    if (!records)
++        return nullptr;
++    auto *objects = AllocateMaterialData<Native>(count);
++    for (unsigned int i = 0; i < count; ++i)
++        decode(objects[i], MaterialRecordAt<Disk>(records, i));
++    return objects;
++}
++
++const char *ReadOptionalNativeString(std::uint32_t encoded)
++{
++    return encoded ? DB_ReadNativeAssetName(encoded) : nullptr;
++}
++
++struct DiskEmblemCategory { std::uint32_t name, description; };
++struct DiskEmblemIcon
++{
++    std::uint32_t image, description;
++    float outlineSize;
++    std::int32_t defaultColor, cost, unlockLevel, unlockPLevel, unclassifyAt, sortKey;
++    std::uint32_t category;
++};
++struct DiskEmblemBackground
++{
++    std::uint32_t material, description;
++    std::int32_t cost, unlockLevel, unlockPLevel, unclassifyAt;
++};
++struct DiskEmblemSet
++{
++    std::int32_t colorCount;
++    DiskArrayRef layers, categories, icons, backgrounds, lookup;
++};
++static_assert(sizeof(DiskEmblemSet) == 44 && sizeof(EmblemLayer) == 12);
++static_assert(sizeof(DiskEmblemCategory) == 8 && sizeof(DiskEmblemIcon) == 40);
++static_assert(sizeof(DiskEmblemBackground) == 24);
++
++void DecodeEmblemCategory(EmblemCategory &category, const DiskEmblemCategory &disk)
++{
++    category.name = ReadOptionalNativeString(disk.name);
++    category.description = ReadOptionalNativeString(disk.description);
++}
++
++void DecodeEmblemIcon(EmblemIcon &icon, const DiskEmblemIcon &disk)
++{
++    icon.image = reinterpret_cast<GfxImage *>(static_cast<std::uintptr_t>(disk.image));
++    varGfxImagePtr = &icon.image;
++    Load_GfxImagePtr(false);
++    icon.description = ReadOptionalNativeString(disk.description);
++    icon.outlineSize = disk.outlineSize;
++    icon.defaultColor = disk.defaultColor;
++    icon.cost = disk.cost;
++    icon.unlockLevel = disk.unlockLevel;
++    icon.unlockPLevel = disk.unlockPLevel;
++    icon.unclassifyAt = disk.unclassifyAt;
++    icon.sortKey = disk.sortKey;
++    icon.category = disk.category;
++}
++
++void DecodeEmblemBackground(EmblemBackground &background, const DiskEmblemBackground &disk)
++{
++    background.material = reinterpret_cast<Material *>(static_cast<std::uintptr_t>(disk.material));
++    varMaterialHandle = &background.material;
++    Load_MaterialHandle(false);
++    background.description = ReadOptionalNativeString(disk.description);
++    background.cost = disk.cost;
++    background.unlockLevel = disk.unlockLevel;
++    background.unlockPLevel = disk.unlockPLevel;
++    background.unclassifyAt = disk.unclassifyAt;
++}
++}
++
+ void __cdecl Load_EmblemSet(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varEmblemSet, 44);
+-    DB_PushStreamPos(4u);
+-    if ( varEmblemSet->layers )
+-    {
+-        varEmblemSet->layers = (EmblemLayer *)AllocLoad_FxElemVisStateSample();
+-        varEmblemLayer = varEmblemSet->layers;
+-        Load_EmblemLayerArray(1, varEmblemSet->layerCount);
+-    }
+-    if ( varEmblemSet->categories )
+-    {
+-        varEmblemSet->categories = (EmblemCategory *)AllocLoad_FxElemVisStateSample();
+-        varEmblemCategory = varEmblemSet->categories;
+-        Load_EmblemCategoryArray(1, varEmblemSet->categoryCount);
+-    }
+-    if ( varEmblemSet->icons )
+-    {
+-        varEmblemSet->icons = (EmblemIcon *)AllocLoad_FxElemVisStateSample();
+-        varEmblemIcon = varEmblemSet->icons;
+-        Load_EmblemIconArray(1, varEmblemSet->iconCount);
+-    }
+-    if ( varEmblemSet->backgrounds )
+-    {
+-        varEmblemSet->backgrounds = (EmblemBackground *)AllocLoad_FxElemVisStateSample();
+-        varEmblemBackground = varEmblemSet->backgrounds;
+-        Load_EmblemBackgroundArray(1, varEmblemSet->backgroundCount);
+-    }
+-    if ( varEmblemSet->backgroundLookup )
+-    {
+-        varEmblemSet->backgroundLookup = (__int16 *)AllocLoad_XBlendInfo();
+-        varshort = varEmblemSet->backgroundLookup;
+-        Load_shortArray(1, varEmblemSet->backgroundLookupCount);
+-    }
++    DiskEmblemSet disk{};
++    if (!ReadTableHeader(atStreamStart, disk))
++        return;
++    if (disk.colorCount < 0 || disk.layers.count < 0 || disk.categories.count < 0 ||
++        disk.icons.count < 0 || disk.backgrounds.count < 0 || disk.lookup.count < 0)
++    {
++        Com_Error(ERR_DROP, "Invalid emblem set dimensions");
++        return;
++    }
++    auto &set = *varEmblemSet;
++    set.colorCount = disk.colorCount;
++    set.layerCount = disk.layers.count;
++    set.categoryCount = disk.categories.count;
++    set.iconCount = disk.icons.count;
++    set.backgroundCount = disk.backgrounds.count;
++    set.backgroundLookupCount = disk.lookup.count;
++    DB_PushStreamPos(4);
++    if (disk.layers.present && disk.layers.count)
++        set.layers = reinterpret_cast<EmblemLayer *>(ReadTableRecords<EmblemLayer>(disk.layers.count));
++    set.categories = ReadNativeAssetArray<EmblemCategory, DiskEmblemCategory>(disk.categories, DecodeEmblemCategory);
++    set.icons = ReadNativeAssetArray<EmblemIcon, DiskEmblemIcon>(disk.icons, DecodeEmblemIcon);
++    set.backgrounds = ReadNativeAssetArray<EmblemBackground, DiskEmblemBackground>(disk.backgrounds, DecodeEmblemBackground);
++    if (disk.lookup.present && disk.lookup.count)
++        set.backgroundLookup = reinterpret_cast<__int16 *>(ReadTableRecords<__int16>(disk.lookup.count, 1));
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_EmblemSetPtr(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varEmblemSetPtr, 4);
+-    DB_PushStreamPos(0);
+-    if ( *varEmblemSetPtr )
+-    {
+-        value = (unsigned int)*varEmblemSetPtr;
+-        if ( *varEmblemSetPtr == (EmblemSet *)-1 || value == -2 )
+-        {
+-            *varEmblemSetPtr = (EmblemSet *)AllocLoad_FxElemVisStateSample();
+-            varEmblemSet = *varEmblemSetPtr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_EmblemSet(1);
+-            Load_EmblemSetAsset((XAssetHeader *)varEmblemSetPtr);
+-            if ( inserted )
+-                *inserted = *varEmblemSetPtr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varEmblemSetPtr);
+-        }
+-    }
+-    DB_PopStreamPos();
++    LoadNativeNamedAsset(atStreamStart, *varEmblemSetPtr, varEmblemSet, ASSET_TYPE_EMBLEMSET,
++                         &XAssetHeader::emblemSet, Load_EmblemSet, Load_EmblemSetAsset,
++                         static_cast<const char *EmblemSet::*>(nullptr));
+ }
+ 
+ void __cdecl Mark_EmblemIcon()
+@@ -8265,50 +8323,109 @@
+     Load_ddlDef_t(0);
+ }
+ 
++namespace
++{
++struct DiskDDLMember
++{
++    std::uint32_t name;
++    unsigned char fields[44];
++};
++struct DiskDDLStruct
++{
++    std::uint32_t name;
++    std::int32_t size;
++    DiskArrayRef members;
++};
++struct DiskDDLEnum
++{
++    std::uint32_t name;
++    DiskArrayRef members;
++};
++struct DiskDDLDefinition
++{
++    std::int32_t version, size;
++    std::uint32_t structs;
++    std::int32_t structCount;
++    std::uint32_t enums;
++    std::int32_t enumCount;
++    std::uint32_t next;
++};
++struct DiskDDLRoot { std::uint32_t name, definition; };
++
++static_assert(sizeof(DiskDDLMember) == 48 && sizeof(DiskDDLStruct) == 16);
++static_assert(sizeof(DiskDDLEnum) == 12 && sizeof(DiskDDLDefinition) == 28);
++static_assert(sizeof(DiskDDLRoot) == 8);
++static_assert(offsetof(ddlMemberDef_t, permission) - offsetof(ddlMemberDef_t, size) == 40);
++
++void DecodeDDLMember(ddlMemberDef_t &member, const DiskDDLMember &disk)
++{
++    member.name = ReadOptionalNativeString(disk.name);
++    auto *fields = reinterpret_cast<unsigned char *>(&member) + offsetof(ddlMemberDef_t, size);
++    std::memcpy(fields, disk.fields, sizeof(disk.fields));
++}
++
++void DecodeDDLStruct(ddlStructDef_t &structure, const DiskDDLStruct &disk)
++{
++    structure.name = ReadOptionalNativeString(disk.name);
++    structure.size = disk.size;
++    structure.memberCount = disk.members.count;
++    structure.members = ReadNativeAssetArray<ddlMemberDef_t, DiskDDLMember>(disk.members, DecodeDDLMember);
++}
++
++void DecodeDDLEnum(ddlEnumDef_t &enumeration, const DiskDDLEnum &disk)
++{
++    enumeration.name = ReadOptionalNativeString(disk.name);
++    enumeration.memberCount = disk.members.count;
++    enumeration.members = ReadNativeAssetArray<const char *, std::uint32_t>(
++        disk.members, [](const char *&member, std::uint32_t encoded) {
++            member = ReadOptionalNativeString(encoded);
++        });
++}
++
++ddlDef_t *LoadNativeDDLDefinitions()
++{
++    ddlDef_t *first = nullptr;
++    auto **link = &first;
++    bool hasNext;
++    do
++    {
++        DiskDDLDefinition disk{};
++        if (!ReadTableHeader(true, disk))
++            break;
++        auto *definition = AllocateMaterialData<ddlDef_t>();
++        *link = definition;
++        definition->version = disk.version;
++        definition->size = disk.size;
++        definition->structCount = disk.structCount;
++        definition->enumCount = disk.enumCount;
++        definition->structList = ReadNativeAssetArray<ddlStructDef_t, DiskDDLStruct>(
++            {disk.structCount, disk.structs}, DecodeDDLStruct);
++        definition->enumList = ReadNativeAssetArray<ddlEnumDef_t, DiskDDLEnum>(
++            {disk.enumCount, disk.enums}, DecodeDDLEnum);
++        link = &definition->next;
++        hasNext = disk.next != 0;
++    }
++    while (hasNext);
++    return first;
++}
++}
++
+ void __cdecl Load_ddlRoot_t(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varddlRoot_t, 8);
+-    DB_PushStreamPos(4u);
+-    varXString = &varddlRoot_t->name;
+-    Load_XString(0);
+-    if ( varddlRoot_t->ddlDef )
+-    {
+-        varddlRoot_t->ddlDef = (ddlDef_t *)AllocLoad_FxElemVisStateSample();
+-        varddlDef_t = varddlRoot_t->ddlDef;
+-        Load_ddlDef_t(1);
+-    }
++    DiskDDLRoot disk{};
++    if (!ReadTableHeader(atStreamStart, disk))
++        return;
++    DB_PushStreamPos(4);
++    varddlRoot_t->name = DB_ReadNativeAssetName(disk.name);
++    if (disk.definition)
++        varddlRoot_t->ddlDef = LoadNativeDDLDefinitions();
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_ddlRoot_ptr(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varddlRoot_ptr, 4);
+-    DB_PushStreamPos(0);
+-    if ( *varddlRoot_ptr )
+-    {
+-        value = (unsigned int)*varddlRoot_ptr;
+-        if ( *varddlRoot_ptr == (ddlRoot_t *)-1 || value == -2 )
+-        {
+-            *varddlRoot_ptr = (ddlRoot_t *)AllocLoad_FxElemVisStateSample();
+-            varddlRoot_t = *varddlRoot_ptr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_ddlRoot_t(1);
+-            Load_DDLAsset((XAssetHeader *)varddlRoot_ptr);
+-            if ( inserted )
+-                *inserted = *varddlRoot_ptr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varddlRoot_ptr);
+-        }
+-    }
+-    DB_PopStreamPos();
++    LoadNativeNamedAsset(atStreamStart, *varddlRoot_ptr, varddlRoot_t, ASSET_TYPE_DDL,
++                         &XAssetHeader::ddlRoot, Load_ddlRoot_t, Load_DDLAsset);
+ }
+ 
+ void __cdecl Mark_ddlRoot_ptr()
+--- a/src/database/db_file_load.cpp
++++ b/src/database/db_file_load.cpp
+@@ -636,7 +636,8 @@
+             asset.type == ASSET_TYPE_LOCALIZE_ENTRY || asset.type == ASSET_TYPE_STRINGTABLE ||
+             asset.type == ASSET_TYPE_LIGHT_DEF || asset.type == ASSET_TYPE_PHYSPRESET ||
+             asset.type == ASSET_TYPE_MAP_ENTS || asset.type == ASSET_TYPE_XGLOBALS ||
+-            asset.type == ASSET_TYPE_COMWORLD || asset.type == ASSET_TYPE_FONT)
++            asset.type == ASSET_TYPE_COMWORLD || asset.type == ASSET_TYPE_FONT ||
++            asset.type == ASSET_TYPE_DDL || asset.type == ASSET_TYPE_EMBLEMSET)
+             DB_RecordNativeAssetAlias(serialized + sizeof(disk) * i + offsetof(FastfileAsset, header),
+                                      asset.type, asset.header.data);
+         if (g_load.abort)
+--- a/src/database/db_assetnames.cpp
++++ b/src/database/db_assetnames.cpp
+@@ -16,6 +16,7 @@
+ #include <bgame/bg_emblems.h>
+ #include <qcommon/com_bsp.h>
+ #include <gfx_d3d/r_extracam.h>
++#include <ddl/ddl_api.h>
+ #include <qcommon/cm_load_obj.h>
+ #include <stringed/stringed_hooks.h>
+ #include <universal/com_stringtable.h>
+@@ -239,7 +240,6 @@
+     return 64;
+ }
+ 
+-static_assert(sizeof(EmblemSet) == 44);
+ int __cdecl DB_SizeofXAsset_EmblemSet_()
+ {
+     return 44;
+@@ -450,6 +450,8 @@
+     // These x64 loaders hand native objects to the registry for cloning.
+     switch (type)
+     {
++    case ASSET_TYPE_DDL: return sizeof(ddlRoot_t);
++    case ASSET_TYPE_EMBLEMSET: return sizeof(EmblemSet);
+     case ASSET_TYPE_COMWORLD: return sizeof(ComWorld);
+     case ASSET_TYPE_FONT: return sizeof(Font_s);
+     case ASSET_TYPE_RAWFILE: return sizeof(RawFile);

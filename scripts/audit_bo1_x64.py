@@ -118,6 +118,8 @@ def asset_dispatch(root):
     native = {
         "Load_GfxImagePtr",
         "Load_MaterialHandle",
+        "Load_ddlRoot_ptr",
+        "Load_EmblemSetPtr",
         "Load_ComWorldPtr",
         "Load_FontHandle",
         "Load_GfxLightDefPtr",
