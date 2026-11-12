@@ -1,0 +1,65 @@
+name: Windows multiplayer build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        edition: [faithful, enhanced]
+        configuration: [Debug, Release]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Extract DirectX SDK
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'DXSDK_Jun10.exe'
+          $extract = Join-Path $env:RUNNER_TEMP 'directx-sdk'
+          $url = 'https://download.microsoft.com/download/a/e/7/ae743f1f-632b-4809-87a9-aa1bb3458e31/DXSDK_Jun10.exe'
+          curl.exe --fail --location --retry 3 --output $installer $url
+          if ($LASTEXITCODE -ne 0) { throw 'DirectX SDK download failed' }
+          & "$env:ProgramFiles\7-Zip\7z.exe" x $installer "-o$extract" 'DXSDK/Include/*' 'DXSDK/Lib/x86/*' -r -y
+          if ($LASTEXITCODE -ne 0) { throw 'DirectX SDK extraction failed' }
+          $sdk = Join-Path $extract 'DXSDK'
+          if (!(Test-Path (Join-Path $sdk 'Include/d3dx9.h'))) { throw 'DirectX SDK headers missing' }
+          "DXSDK_DIR=$sdk" >> $env:GITHUB_ENV
+
+      - name: Configure and build
+        shell: pwsh
+        run: |
+          $edition = '${{ matrix.edition }}'
+          $configuration = '${{ matrix.configuration }}'
+          cmake --preset $edition
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset "$edition-$($configuration.ToLowerInvariant())"
+
+      - name: Check executable
+        shell: pwsh
+        run: |
+          $edition = '${{ matrix.edition }}'
+          $configuration = '${{ matrix.configuration }}'
+          $file = if ($edition -eq 'enhanced') { 'BlackOpsMP-Community.exe' } else { 'KisakBlack.exe' }
+          $exe = Get-Item "build/$edition/$configuration/$file" -ErrorAction Stop
+          $bytes = [IO.File]::ReadAllBytes($exe.FullName)
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+          if ([BitConverter]::ToUInt32($bytes, $peOffset) -ne 0x4550 -or
+              [BitConverter]::ToUInt16($bytes, $peOffset + 4) -ne 0x14c) {
+            throw "Expected an x86 Windows executable at $exe"
+          }
+          if ($edition -eq 'enhanced' -and
+              $exe.VersionInfo.FileDescription -ne 'Black Ops Multiplayer - Community Enhanced') {
+            throw 'Enhanced version resource missing'
+          }

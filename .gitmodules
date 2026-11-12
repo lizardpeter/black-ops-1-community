@@ -1,0 +1,3 @@
+[submodule "upstream/kisakblack"]
+	path = upstream/kisakblack
+	url = https://github.com/SwagSoftware/KisakBlack.git

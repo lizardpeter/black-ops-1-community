@@ -1,0 +1,29 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "win32",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "architecture": "Win32",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "faithful",
+      "inherits": "win32",
+      "cacheVariables": { "BO1_COMMUNITY_ENHANCED": false }
+    },
+    {
+      "name": "enhanced",
+      "inherits": "win32",
+      "cacheVariables": { "BO1_COMMUNITY_ENHANCED": true }
+    }
+  ],
+  "buildPresets": [
+    { "name": "faithful-release", "configurePreset": "faithful", "configuration": "Release" },
+    { "name": "faithful-debug", "configurePreset": "faithful", "configuration": "Debug" },
+    { "name": "enhanced-release", "configurePreset": "enhanced", "configuration": "Release" },
+    { "name": "enhanced-debug", "configurePreset": "enhanced", "configuration": "Debug" }
+  ]
+}
