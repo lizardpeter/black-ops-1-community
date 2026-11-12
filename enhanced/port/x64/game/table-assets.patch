@@ -1,0 +1,342 @@
+--- a/src/database/db_load.cpp
++++ b/src/database/db_load.cpp
+@@ -1323,50 +1323,122 @@
+     Load_Stream(atStreamStart, (unsigned __int8 *)varPackIndexEntry, 12 * count);
+ }
+ 
++namespace
++{
++template <typename T>
++unsigned char *ReadTableRecords(unsigned int count, int alignment = 3)
++{
++    if (count > INT32_MAX / sizeof(T))
++    {
++        Com_Error(ERR_DROP, "Fastfile table exceeds supported size");
++        return nullptr;
++    }
++    const auto size = static_cast<int>(sizeof(T) * count);
++    auto *data = DB_GetNativeStreamSpan(alignment, size);
++    if (data && size)
++        Load_Stream(true, data, size);
++    return data;
++}
++
++template <typename T>
++bool ReadTableHeader(bool atStreamStart, T &disk)
++{
++    if (!atStreamStart)
++    {
++        Com_Error(ERR_DROP, "Fastfile table header must be read at stream start");
++        return false;
++    }
++    const auto *bytes = ReadTableRecords<T>(1);
++    if (!bytes)
++        return false;
++    std::memcpy(&disk, bytes, sizeof(disk));
++    return true;
++}
++
++template <typename T>
++void LoadNativeTableAsset(bool atStreamStart, T *&target, T *&current, XAssetType type,
++                          T *XAssetHeader::*member, void (__cdecl *load)(bool),
++                          void (__cdecl *registerAsset)(XAssetHeader *))
++{
++    std::uint32_t encoded;
++    const unsigned char *sourceSlot = nullptr;
++    if (atStreamStart)
++    {
++        sourceSlot = ReadTableRecords<std::uint32_t>(1);
++        if (!sourceSlot)
++            return;
++        std::memcpy(&encoded, sourceSlot, sizeof(encoded));
++    }
++    else
++    {
++        encoded = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(target));
++    }
++
++    DB_PushStreamPos(0);
++    target = nullptr;
++    const auto kind = bo1::DecodeFastfileReference(encoded).kind;
++    if (kind == bo1::ReferenceKind::inlineData || kind == bo1::ReferenceKind::inlineWithFixup)
++    {
++        const unsigned char *fixup = nullptr;
++        if (kind == bo1::ReferenceKind::inlineWithFixup)
++        {
++            DB_PushStreamPos(4);
++            fixup = DB_GetNativeStreamSpan(3, sizeof(encoded));
++            if (fixup)
++                DB_IncStreamPos(sizeof(encoded));
++            DB_PopStreamPos();
++        }
++        if (kind == bo1::ReferenceKind::inlineData || fixup)
++        {
++            T loaded{};
++            current = &loaded;
++            load(true);
++            if (loaded.name)
++            {
++                XAssetHeader asset(&loaded);
++                registerAsset(&asset);
++                target = asset.*member;
++                if (fixup)
++                    DB_RecordNativeAssetAlias(fixup, type, target);
++            }
++        }
++    }
++    else if (kind != bo1::ReferenceKind::absent)
++    {
++        target = static_cast<T *>(DB_FindNativeAssetAlias(encoded, type));
++    }
++    current = target;
++    if (sourceSlot)
++        DB_RecordNativeAssetAlias(sourceSlot, type, target);
++    DB_PopStreamPos();
++}
++}
++
+ void __cdecl Load_PackIndex(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varPackIndex, 28);
+-    DB_PushStreamPos(4u);
+-    varXString = &varPackIndex->name;
+-    Load_XString(0);
+-    if ( varPackIndex->entries )
+-    {
+-        varPackIndex->entries = (PackIndexEntry *)AllocLoad_FxElemVisStateSample();
+-        varPackIndexEntry = varPackIndex->entries;
+-        Load_PackIndexEntryArray(1, varPackIndex->header.count);
+-    }
++    struct DiskPackIndex
++    {
++        std::uint32_t name;
++        PackIndexHeader header;
++        std::uint32_t entries;
++    };
++    static_assert(sizeof(DiskPackIndex) == 28 && sizeof(PackIndexEntry) == 12);
++    DiskPackIndex disk{};
++    if (!ReadTableHeader(atStreamStart, disk))
++        return;
++    DB_PushStreamPos(4);
++    auto &pack = *varPackIndex;
++    pack.header = disk.header;
++    pack.name = DB_ReadNativeAssetName(disk.name);
++    if (disk.entries && disk.header.count)
++        pack.entries = reinterpret_cast<PackIndexEntry *>(ReadTableRecords<PackIndexEntry>(disk.header.count));
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_PackIndexPtr(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varPackIndexPtr, 4);
+-    DB_PushStreamPos(0);
+-    if ( *varPackIndexPtr )
+-    {
+-        value = (unsigned int)*varPackIndexPtr;
+-        if ( *varPackIndexPtr == (PackIndex *)-1 || value == -2 )
+-        {
+-            *varPackIndexPtr = (PackIndex *)AllocLoad_FxElemVisStateSample();
+-            varPackIndex = *varPackIndexPtr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_PackIndex(1);
+-            Load_PackIndexAsset((XAssetHeader *)varPackIndexPtr);
+-            if ( inserted )
+-                *inserted = *varPackIndexPtr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varPackIndexPtr);
+-        }
+-    }
+-    DB_PopStreamPos();
++    LoadNativeTableAsset(atStreamStart, *varPackIndexPtr, varPackIndex, ASSET_TYPE_PACK_INDEX,
++                         &XAssetHeader::packIndex, Load_PackIndex, Load_PackIndexAsset);
+ }
+ 
+ void __cdecl Mark_SndDriverGlobalsPtr()
+@@ -6616,44 +6688,24 @@
+ 
+ void __cdecl Load_LocalizeEntry(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varLocalizeEntry, 8);
+-    DB_PushStreamPos(4u);
+-    varXString = &varLocalizeEntry->value;
+-    Load_XString(0);
+-    varXString = &varLocalizeEntry->name;
+-    Load_XString(0);
++    struct DiskLocalize
++    {
++        std::uint32_t value, name;
++    };
++    static_assert(sizeof(DiskLocalize) == 8);
++    DiskLocalize disk{};
++    if (!ReadTableHeader(atStreamStart, disk))
++        return;
++    DB_PushStreamPos(4);
++    varLocalizeEntry->value = disk.value ? DB_ReadNativeAssetName(disk.value) : nullptr;
++    varLocalizeEntry->name = DB_ReadNativeAssetName(disk.name);
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_LocalizeEntryPtr(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varLocalizeEntryPtr, 4);
+-    DB_PushStreamPos(0);
+-    if ( *varLocalizeEntryPtr )
+-    {
+-        value = (unsigned int)*varLocalizeEntryPtr;
+-        if ( *varLocalizeEntryPtr == (LocalizeEntry *)-1 || value == -2 )
+-        {
+-            *varLocalizeEntryPtr = (LocalizeEntry *)AllocLoad_FxElemVisStateSample();
+-            varLocalizeEntry = *varLocalizeEntryPtr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_LocalizeEntry(1);
+-            Load_LocalizeEntryAsset((XAssetHeader *)varLocalizeEntryPtr);
+-            if ( inserted )
+-                *inserted = *varLocalizeEntryPtr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varLocalizeEntryPtr);
+-        }
+-    }
+-    DB_PopStreamPos();
++    LoadNativeTableAsset(atStreamStart, *varLocalizeEntryPtr, varLocalizeEntry, ASSET_TYPE_LOCALIZE_ENTRY,
++                         &XAssetHeader::localize, Load_LocalizeEntry, Load_LocalizeEntryAsset);
+ }
+ 
+ void __cdecl Mark_LocalizeEntryPtr()
+@@ -8051,54 +8103,56 @@
+ 
+ void __cdecl Load_StringTable(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varStringTable, sizeof(StringTable));
+-    DB_PushStreamPos(4u);
+-    varXString = &varStringTable->name;
+-    Load_XString(0);
+-    if ( varStringTable->values )
+-    {
+-        varStringTable->values = (StringTableCell *)AllocLoad_FxElemVisStateSample();
+-        varStringTableCell = varStringTable->values;
+-        Load_StringTableCellArray(1, varStringTable->rowCount * varStringTable->columnCount);
+-    }
+-    if ( varStringTable->cellIndex )
+-    {
+-        varStringTable->cellIndex = (__int16 *)AllocLoad_XBlendInfo();
+-        varshort = varStringTable->cellIndex;
+-        Load_shortArray(1, varStringTable->rowCount * varStringTable->columnCount);
+-    }
++    struct DiskStringTable
++    {
++        std::uint32_t name;
++        std::int32_t columns, rows;
++        std::uint32_t values, indices;
++    };
++    struct DiskCell
++    {
++        std::uint32_t string;
++        std::int32_t hash;
++    };
++    static_assert(sizeof(DiskStringTable) == 20 && sizeof(DiskCell) == 8);
++    DiskStringTable disk{};
++    if (!ReadTableHeader(atStreamStart, disk))
++        return;
++    const auto cells = static_cast<std::int64_t>(disk.columns) * disk.rows;
++    if (disk.columns < 0 || disk.rows < 0 || cells > INT32_MAX / static_cast<int>(sizeof(DiskCell)))
++    {
++        Com_Error(ERR_DROP, "Invalid string table dimensions");
++        return;
++    }
++    const auto count = static_cast<unsigned int>(cells);
++    auto &table = *varStringTable;
++    table.columnCount = disk.columns;
++    table.rowCount = disk.rows;
++    DB_PushStreamPos(4);
++    table.name = DB_ReadNativeAssetName(disk.name);
++    if (disk.values && count)
++    {
++        const auto *records = ReadTableRecords<DiskCell>(count);
++        if (records)
++        {
++            table.values = AllocateMaterialData<StringTableCell>(count);
++            for (unsigned int i = 0; i < count; ++i)
++            {
++                const auto cell = MaterialRecordAt<DiskCell>(records, i);
++                table.values[i].hash = cell.hash;
++                table.values[i].string = cell.string ? DB_ReadNativeAssetName(cell.string) : nullptr;
++            }
++        }
++    }
++    if (disk.indices && count)
++        table.cellIndex = reinterpret_cast<__int16 *>(ReadTableRecords<__int16>(count, 1));
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_StringTablePtr(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varStringTablePtr, 4);
+-    DB_PushStreamPos(0);
+-    if ( *varStringTablePtr )
+-    {
+-        value = (unsigned int)*varStringTablePtr;
+-        if ( *varStringTablePtr == (StringTable *)-1 || value == -2 )
+-        {
+-            *varStringTablePtr = (StringTable *)AllocLoad_FxElemVisStateSample();
+-            varStringTable = *varStringTablePtr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_StringTable(1);
+-            Load_StringTableAsset((XAssetHeader *)varStringTablePtr);
+-            if ( inserted )
+-                *inserted = *varStringTablePtr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varStringTablePtr);
+-        }
+-    }
+-    DB_PopStreamPos();
++    LoadNativeTableAsset(atStreamStart, *varStringTablePtr, varStringTable, ASSET_TYPE_STRINGTABLE,
++                         &XAssetHeader::stringTable, Load_StringTable, Load_StringTableAsset);
+ }
+ 
+ void __cdecl Mark_StringTablePtr()
+--- a/src/database/db_file_load.cpp
++++ b/src/database/db_file_load.cpp
+@@ -632,7 +632,8 @@
+         Load_XAsset(false);
+         if (asset.type == ASSET_TYPE_RAWFILE || asset.type == ASSET_TYPE_SNDDRIVER_GLOBALS ||
+             asset.type == ASSET_TYPE_IMAGE || asset.type == ASSET_TYPE_TECHNIQUE_SET ||
+-            asset.type == ASSET_TYPE_MATERIAL)
++            asset.type == ASSET_TYPE_MATERIAL || asset.type == ASSET_TYPE_PACK_INDEX ||
++            asset.type == ASSET_TYPE_LOCALIZE_ENTRY || asset.type == ASSET_TYPE_STRINGTABLE)
+             DB_RecordNativeAssetAlias(serialized + sizeof(disk) * i + offsetof(FastfileAsset, header),
+                                      asset.type, asset.header.data);
+         if (g_load.abort)
+--- a/src/universal/com_stringtable.h
++++ b/src/universal/com_stringtable.h
+@@ -14,7 +14,6 @@
+     StringTableCell *values;
+     __int16 *cellIndex;
+ };
+-static_assert(sizeof(StringTable) == 20);
+ 
+ union XAssetHeader;
+ 

@@ -118,6 +118,9 @@ def asset_dispatch(root):
     native = {
         "Load_GfxImagePtr",
         "Load_MaterialHandle",
+        "Load_LocalizeEntryPtr",
+        "Load_PackIndexPtr",
+        "Load_StringTablePtr",
         "Load_MaterialTechniqueSetPtr",
         "Load_RawFilePtr",
         "Load_SndDriverGlobalsPtr",
