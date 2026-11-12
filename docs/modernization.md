@@ -15,3 +15,25 @@ The enhanced target builds against the pinned KisakBlack tree. CMake copies only
 - Compare movement traces and client/server prediction at different render limits using identical time-stamped inputs. Then prototype separate simulation and presentation clocks with shared movement stepping and render interpolation.
 - Exercise Raw Input in a playable session with high-polling mice, focus changes, mouse capture, and menu transitions. Ghosts-style MW2019 sensitivity and render-time mouse late latch require changes farther down the input path.
 - Check high FOV and ultrawide with ADS, vehicle cameras, and HUD layout in a playable session. The current test verifies the projection math.
+
+## Frame and user-command timing
+
+| Boundary | Source | What to measure before separating clocks |
+| --- | --- | --- |
+| Outer frame budget | `qcommon/common.cpp`, `Com_Frame_Try_Block_Function` | Event-pump time, measured elapsed time, the minimum time from `com_maxfps`, and the time actually waited in `R_WaitEndTime`. The current loop can advance its bookkeeping by more than the measured elapsed time. |
+| Input and commands | `client_mp/cl_main_mp.cpp`, `CL_RunOncePerClientFrame` and `client_mp/cl_input_mp.cpp`, `CL_CreateNewCommands` | Motion counts received and consumed, command numbers, command server times, and commands delivered by `CL_SendCmd`. Track menu, loading, and active play separately. |
+| Prediction and authority | `cgame_mp/cg_predict_mp.cpp`, `CG_PredictPlayerState` and `bgame/bg_pmove.cpp`, `Pmove_1` | Replay identical time-stamped commands through client prediction and authoritative movement. Compare command time, position, velocity, jump apex, and correction frequency at 60, 120, 240, and uncapped presentation rates. |
+| Screen and GPU | `client_mp/cl_scrn_mp.cpp`, `SCR_UpdateScreen` and `gfx_d3d/rb_backend.cpp`, `RB_SwapBuffers` | Record scene build, GPU fence wait, and actual present timestamps separately. These distinguish render throughput from simulation frequency. |
+
+A fixed simulation clock should start with local multiplayer and use the same command semantics in prediction and on the server. Keep the current wire format until identical command streams demonstrate parity. Interpolate between simulation states for rendering and keep render-only view updates out of authoritative command state.
+
+## D3D9 backend boundary
+
+| Area | BO1 source | Vulkan port dependency |
+| --- | --- | --- |
+| Device and present | `R_PreCreateWindow`, `R_CreateDevice`, `R_SetD3DPresentParameters`, `R_ResetDevice`, `RB_SwapBuffers` | Swapchain creation, present mode, image lifetime, resize, and device recovery. |
+| Shaders and input layout | `database/db_load.cpp` material shader loaders, `gfx_d3d/r_material.cpp`, `gfx_d3d/rb_resource.cpp` | Inventory the D3D9 vertex and pixel shader token streams and declarations. Translate and compare representative shaders, including their register bindings, before wiring SPIR-V into the scene. |
+| Buffers and textures | `gfx_d3d/r_buffers.cpp`, `gfx_d3d/r_image.cpp` | Map the default, managed, and system-memory resource usages to staging, GPU allocations, and per-frame uploads. |
+| Render targets and resolves | `gfx_d3d/r_rendertarget.cpp`, `R_Resolve` in `rb_backend.cpp`, and `rb_postfx.cpp` | Separate copies, filtered blits, multisample resolves, and sampleable depth. The D3D9 path includes an INTZ depth texture case that needs a format and usage equivalent. |
+| Pipeline and draws | `R_SetState` in `r_shade.cpp` and stream binding, sampler state, and `DrawIndexedPrimitive` in `r_state.cpp` | Convert state bits, shaders, declarations, and render target formats into pipeline keys. Compare a captured draw sequence before moving larger render passes. |
+| Queries and fences | Query creation in `r_init.cpp` and `R_FinishGpuFence` in `r_setstate_d3d.cpp` | Map occlusion queries and frame-completion tracking separately. Verify latency at present with a live swapchain. |
