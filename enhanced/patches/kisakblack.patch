@@ -700,3 +700,73 @@
      }
  
      FrameMark; // backend thread Frame marker
+--- a/src/physics/phys_main.cpp
++++ b/src/physics/phys_main.cpp
+@@ -141,6 +141,7 @@
+ 
+ bool gravityChange;
+ static bool physInited = false;
++static const dvar_t *phys_fixedClientStep;
+ void __cdecl Phys_Init()
+ {
+     phys_surface_type_info v0; // [esp+30h] [ebp-68h] BYREF
+@@ -158,6 +159,8 @@
+     if ( !physInited )
+     {
+         physInited = 1;
++        phys_fixedClientStep = _Dvar_RegisterBool(
++            "phys_fixedClientStep", false, 0, "Advance live client physics in fixed 5 ms steps");
+         phys_gravity = _Dvar_RegisterFloat(
+                                          "phys_gravity",
+                                          -800.0,
+@@ -3669,6 +3672,34 @@
+     return 1;
+ }
+ 
++static void Phys_RunClientTicks(int targetTime)
++{
++    constexpr int stepMsec = 5;
++    constexpr int maxCatchupMsec = 100;
++    auto elapsed = static_cast<long long>(targetTime) - physGlob.timeLastUpdate;
++    if (elapsed < 0)
++    {
++        // Map changes and clock resets must not integrate a negative delta.
++        physGlob.timeLastUpdate = targetTime;
++        physGlob.timeLastSnapshot = targetTime;
++        return;
++    }
++
++    if (elapsed >= maxCatchupMsec + stepMsec)
++    {
++        // Drop whole ticks beyond the catch-up budget while retaining the sub-tick remainder.
++        const int remainder = static_cast<int>(elapsed % stepMsec);
++        elapsed = maxCatchupMsec + remainder;
++        physGlob.timeLastUpdate = targetTime - static_cast<int>(elapsed);
++    }
++
++    while (elapsed >= stepMsec)
++    {
++        Phys_RunToTime(physGlob.timeLastUpdate + stepMsec);
++        elapsed -= stepMsec;
++    }
++}
++
+ void __cdecl PhysicsSystem_Update()
+ {
+     PROF_SCOPED("PhysicsSystem_Update"); // LWSS ADD
+@@ -3685,8 +3716,13 @@
+             if ( CL_LocalClient_IsActive(i) && CL_GetLocalClientConnectionState(i) >= 4 )
+             {
+                 cgameGlob = CG_GetLocalClientGlobals(i);
+-                if ( cgameGlob )
+-                    Phys_RunToTime(cgameGlob->physicsTime);
++                if (cgameGlob)
++                {
++                    if (phys_fixedClientStep && phys_fixedClientStep->current.enabled && !Demo_IsPlaying())
++                        Phys_RunClientTicks(cgameGlob->physicsTime);
++                    else
++                        Phys_RunToTime(cgameGlob->physicsTime);
++                }
+                 return;
+             }
+         }

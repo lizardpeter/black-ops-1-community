@@ -17,6 +17,7 @@ set(overlay_units
     src/gfx_d3d/r_init.cpp
     src/gfx_d3d/r_state.cpp
     src/gfx_d3d/rb_backend.cpp
+    src/physics/phys_main.cpp
     src/win32/win_gamepad.cpp
     src/win32/win_gamerprofile.cpp
     src/win32/win_input.cpp
