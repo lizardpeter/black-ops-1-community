@@ -1,0 +1,311 @@
+--- a/src/database/db_load.cpp
++++ b/src/database/db_load.cpp
+@@ -1952,108 +1952,198 @@
+     }
+ }
+ 
++namespace
++{
++constexpr auto textureAliasType = static_cast<XAssetType>(-1);
++
++const unsigned char *ReserveImageFixup()
++{
++    DB_PushStreamPos(4);
++    const auto *slot = DB_GetNativeStreamSpan(3, sizeof(std::uint32_t));
++    if (slot)
++        DB_IncStreamPos(sizeof(std::uint32_t));
++    DB_PopStreamPos();
++    return slot;
++}
++
++void LoadNativeTexture(std::uint32_t encoded, GfxImage &image)
++{
++    DB_PushStreamPos(0);
++    const auto reference = bo1::DecodeFastfileReference(encoded);
++    if (reference.kind == bo1::ReferenceKind::inlineData ||
++        reference.kind == bo1::ReferenceKind::inlineWithFixup)
++    {
++        auto *header = DB_GetNativeStreamSpan(3, offsetof(GfxImageLoadDef, data));
++        const auto *fixup = reference.kind == bo1::ReferenceKind::inlineWithFixup ?
++            ReserveImageFixup() : nullptr;
++        if (header && (reference.kind != bo1::ReferenceKind::inlineWithFixup || fixup))
++        {
++            varGfxImageLoadDef = reinterpret_cast<GfxImageLoadDef *>(header);
++            Load_GfxImageLoadDef(true);
++            image.texture.loadDef = varGfxImageLoadDef;
++            Load_Texture(&image.texture, &image);
++            if (fixup)
++                DB_RecordNativeAssetAlias(fixup, textureAliasType, image.texture.basemap);
++        }
++    }
++    else if (reference.kind != bo1::ReferenceKind::absent)
++    {
++        image.texture.basemap = static_cast<IDirect3DBaseTexture9 *>(
++            DB_FindNativeAssetAlias(encoded, textureAliasType));
++    }
++    DB_PopStreamPos();
++}
++}
++
+ void __cdecl Load_GfxTextureLoad(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varGfxTextureLoad, 4);
++    std::uint32_t encoded;
++    if (atStreamStart)
++    {
++        auto *slot = DB_GetNativeStreamSpan(3, sizeof(encoded));
++        if (!slot)
++            return;
++        Load_Stream(true, slot, sizeof(encoded));
++        std::memcpy(&encoded, slot, sizeof(encoded));
++    }
++    else
++    {
++        encoded = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(*varGfxTextureLoad));
++    }
++    LoadNativeTexture(encoded, *varGfxImage);
++}
++
++void __cdecl Load_GfxRawTextureArray(bool atStreamStart, int count)
++{
++    Load_Stream(atStreamStart, (unsigned __int8 *)varGfxRawTexture, 4 * count);
++}
++
++void __cdecl Load_GfxImageLoadDef(bool atStreamStart)
++{
++    static_assert(offsetof(GfxImageLoadDef, data) == 12);
++    if (!atStreamStart)
++    {
++        Com_Error(ERR_DROP, "Image load definition must be read from the fastfile stream");
++        return;
++    }
++    Load_Stream(true, &varGfxImageLoadDef->levelCount, 12);
++    const int size = varGfxImageLoadDef->resourceSize;
++    if (size < 0)
++    {
++        Com_Error(ERR_DROP, "Invalid image resource size");
++        return;
++    }
++    if (size)
++    {
++        auto *data = DB_GetNativeStreamSpan(0, size);
++        if (data)
++            Load_Stream(true, data, size);
++    }
++}
++
++void __cdecl Load_GfxImage(bool atStreamStart)
++{
++    if (!atStreamStart)
++    {
++        Com_Error(ERR_DROP, "Image header must be read from the fastfile stream");
++        return;
++    }
++    struct DiskImage
++    {
++        std::uint32_t texture;
++        std::uint8_t mapType, semantic, category, delayLoadPixels;
++        Picmip picmip;
++        std::uint8_t noPicmip, track;
++        CardMemory cardMemory;
++        std::uint16_t width, height, depth;
++        std::uint8_t levelCount, streaming;
++        std::uint32_t baseSize, pixels, loadedSize;
++        std::uint8_t skippedMipLevels;
++        std::uint32_t name, hash;
++    };
++    static_assert(sizeof(DiskImage) == 52 && offsetof(DiskImage, name) == 44);
++    DiskImage disk{};
++    auto *header = DB_GetNativeStreamSpan(3, sizeof(disk));
++    if (!header)
++        return;
++    Load_Stream(true, header, sizeof(disk));
++    std::memcpy(&disk, header, sizeof(disk));
++
++    auto &image = *varGfxImage;
++    image.texture.basemap = nullptr;
++    image.mapType = disk.mapType;
++    image.semantic = disk.semantic;
++    image.category = disk.category;
++    image.delayLoadPixels = disk.delayLoadPixels != 0;
++    image.picmip = disk.picmip;
++    image.noPicmip = disk.noPicmip != 0;
++    image.track = disk.track;
++    image.cardMemory = disk.cardMemory;
++    image.width = disk.width;
++    image.height = disk.height;
++    image.depth = disk.depth;
++    image.levelCount = disk.levelCount;
++    image.streaming = disk.streaming;
++    image.baseSize = disk.baseSize;
++    // CPU pixel buffers are runtime-owned and never restored as addresses from a fastfile.
++    image.pixels = nullptr;
++    image.loadedSize = disk.loadedSize;
++    image.skippedMipLevels = disk.skippedMipLevels;
++    image.hash = disk.hash;
++    DB_PushStreamPos(4);
++    image.name = DB_ReadNativeAssetName(disk.name);
++    if (image.name)
++        LoadNativeTexture(disk.texture, image);
++    DB_PopStreamPos();
++}
++
++void __cdecl Load_GfxImagePtr(bool atStreamStart)
++{
++    std::uint32_t encoded;
++    const unsigned char *sourceSlot = nullptr;
++    if (atStreamStart)
++    {
++        auto *slot = DB_GetNativeStreamSpan(3, sizeof(encoded));
++        if (!slot)
++            return;
++        Load_Stream(true, slot, sizeof(encoded));
++        std::memcpy(&encoded, slot, sizeof(encoded));
++        sourceSlot = slot;
++    }
++    else
++    {
++        encoded = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(*varGfxImagePtr));
++    }
+     DB_PushStreamPos(0);
+-    if ( *varGfxTextureLoad )
+-    {
+-        value = (unsigned int)*varGfxTextureLoad;
+-        if ( *varGfxTextureLoad == (GfxImageLoadDef *)-1 || value == -2 )
+-        {
+-            *varGfxTextureLoad = (GfxImageLoadDef *)AllocLoad_FxElemVisStateSample();
+-            varGfxImageLoadDef = *varGfxTextureLoad;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_GfxImageLoadDef(1);
+-            Load_Texture((GfxTexture *)varGfxTextureLoad, varGfxImage);
+-            if ( inserted )
+-                *inserted = *varGfxTextureLoad;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varGfxTextureLoad);
+-        }
+-    }
+-    DB_PopStreamPos();
+-}
+-
+-void __cdecl Load_GfxRawTextureArray(bool atStreamStart, int count)
+-{
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varGfxRawTexture, 4 * count);
+-}
+-
+-void __cdecl Load_GfxImageLoadDef(bool atStreamStart)
+-{
+-    if ( !atStreamStart
+-        && !Assert_MyHandler(
+-                    "c:\\projects_pc\\cod\\codsrc\\src\\database\\../gfx_d3d/r_image_load_db.h",
+-                    3791,
+-                    0,
+-                    "%s",
+-                    "atStreamStart") )
+-    {
+-        __debugbreak();
+-    }
+-    Load_Stream(1, &varGfxImageLoadDef->levelCount, 12);
+-    if ( DB_GetStreamPos() != varGfxImageLoadDef->data
+-        && !Assert_MyHandler(
+-                    "c:\\projects_pc\\cod\\codsrc\\src\\database\\../gfx_d3d/r_image_load_db.h",
+-                    3793,
+-                    0,
+-                    "%s",
+-                    "DB_GetStreamPos() == reinterpret_cast< byte * >( varGfxImageLoadDef->data )") )
+-    {
+-        __debugbreak();
+-    }
+-    varbyte = varGfxImageLoadDef->data;
+-    Load_byteArray(1, varGfxImageLoadDef->resourceSize);
+-}
+-
+-void __cdecl Load_GfxImage(bool atStreamStart)
+-{
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varGfxImage, 52);
+-    DB_PushStreamPos(4u);
+-    varXString = &varGfxImage->name;
+-    Load_XString(0);
+-    varGfxTextureLoad = (GfxImageLoadDef **)varGfxImage;
+-    Load_GfxTextureLoad(0);
+-    DB_PopStreamPos();
+-}
+-
+-void __cdecl Load_GfxImagePtr(bool atStreamStart)
+-{
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varGfxImagePtr, 4);
+-    DB_PushStreamPos(0);
+-    if ( *varGfxImagePtr )
+-    {
+-        value = (unsigned int)*varGfxImagePtr;
+-        if ( *varGfxImagePtr == (GfxImage *)-1 || value == -2 )
+-        {
+-            *varGfxImagePtr = (GfxImage *)AllocLoad_FxElemVisStateSample();
++    *varGfxImagePtr = nullptr;
++    const auto reference = bo1::DecodeFastfileReference(encoded);
++    if (reference.kind == bo1::ReferenceKind::inlineData ||
++        reference.kind == bo1::ReferenceKind::inlineWithFixup)
++    {
++        const auto *fixup = reference.kind == bo1::ReferenceKind::inlineWithFixup ?
++            ReserveImageFixup() : nullptr;
++        if (reference.kind != bo1::ReferenceKind::inlineWithFixup || fixup)
++        {
++            GfxImage loaded{};
++            varGfxImage = &loaded;
++            Load_GfxImage(true);
++            if (loaded.name)
++            {
++                XAssetHeader asset(&loaded);
++                Load_GfxImageAsset(&asset);
++                *varGfxImagePtr = asset.image;
++                if (fixup)
++                    DB_RecordNativeAssetAlias(fixup, ASSET_TYPE_IMAGE, asset.image);
++            }
+             varGfxImage = *varGfxImagePtr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_GfxImage(1);
+-            Load_GfxImageAsset((XAssetHeader*)varGfxImagePtr);
+-            if ( inserted )
+-                *inserted = *varGfxImagePtr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varGfxImagePtr);
+-        }
+-    }
++        }
++    }
++    else if (reference.kind != bo1::ReferenceKind::absent)
++    {
++        *varGfxImagePtr = static_cast<GfxImage *>(DB_FindNativeAssetAlias(encoded, ASSET_TYPE_IMAGE));
++    }
++    if (sourceSlot)
++        DB_RecordNativeAssetAlias(sourceSlot, ASSET_TYPE_IMAGE, *varGfxImagePtr);
+     DB_PopStreamPos();
+ }
+ 
+--- a/src/database/db_file_load.cpp
++++ b/src/database/db_file_load.cpp
+@@ -630,7 +630,8 @@
+         skipShaderCreationHack = i == skipLoadingMaterialsHack;
+         varXAsset = &asset;
+         Load_XAsset(false);
+-        if (asset.type == ASSET_TYPE_RAWFILE || asset.type == ASSET_TYPE_SNDDRIVER_GLOBALS)
++        if (asset.type == ASSET_TYPE_RAWFILE || asset.type == ASSET_TYPE_SNDDRIVER_GLOBALS ||
++            asset.type == ASSET_TYPE_IMAGE)
+             DB_RecordNativeAssetAlias(serialized + sizeof(disk) * i + offsetof(FastfileAsset, header),
+                                      asset.type, asset.header.data);
+         if (g_load.abort)
