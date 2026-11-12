@@ -19,7 +19,7 @@ jobs:
         configuration: [Debug, Release]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -52,14 +52,23 @@ jobs:
           $edition = '${{ matrix.edition }}'
           $configuration = '${{ matrix.configuration }}'
           $file = if ($edition -eq 'enhanced') { 'BlackOpsMP-Community.exe' } else { 'KisakBlack.exe' }
-          $exe = Get-Item "build/$edition/$configuration/$file" -ErrorAction Stop
+          $path = "build/$edition/$configuration/$file"
+          if (!(Test-Path $path -PathType Leaf)) {
+            Write-Host "::error::Expected executable missing at $path"
+            exit 1
+          }
+          $exe = Get-Item $path
           $bytes = [IO.File]::ReadAllBytes($exe.FullName)
           $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
           if ([BitConverter]::ToUInt32($bytes, $peOffset) -ne 0x4550 -or
               [BitConverter]::ToUInt16($bytes, $peOffset + 4) -ne 0x14c) {
-            throw "Expected an x86 Windows executable at $exe"
+            Write-Host "::error::Expected an x86 Windows executable at $exe"
+            exit 1
           }
-          if ($edition -eq 'enhanced' -and
-              $exe.VersionInfo.FileDescription -ne 'Black Ops Multiplayer - Community Enhanced') {
-            throw 'Enhanced version resource missing'
+          if ($edition -eq 'enhanced') {
+            $description = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe.FullName).FileDescription
+            if ($description -cne 'Black Ops Multiplayer - Community Enhanced') {
+              Write-Host "::error::Unexpected file description '$description' in $path"
+              exit 1
+            }
           }

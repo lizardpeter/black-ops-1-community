@@ -1,6 +1,10 @@
 #include <winver.h>
 
-VS_VERSION_INFO VERSIONINFO
+LANGUAGE 0x09, 0x01
+
+1 VERSIONINFO
+FILEVERSION 0,1,0,0
+PRODUCTVERSION 0,1,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 #ifdef _DEBUG
 FILEFLAGS VS_FF_DEBUG
@@ -12,15 +16,17 @@ FILETYPE VFT_APP
 BEGIN
     BLOCK "StringFileInfo"
     BEGIN
-        BLOCK "040904B0"
+        BLOCK "040904E4"
         BEGIN
-            VALUE "FileDescription", "Black Ops Multiplayer - Community Enhanced"
-            VALUE "OriginalFilename", "BlackOpsMP-Community.exe"
-            VALUE "ProductName", "Black Ops 1 Community"
+            VALUE "FileDescription", "Black Ops Multiplayer - Community Enhanced\0"
+            VALUE "FileVersion", "0.1.0.0\0"
+            VALUE "OriginalFilename", "BlackOpsMP-Community.exe\0"
+            VALUE "ProductName", "Black Ops 1 Community\0"
+            VALUE "ProductVersion", "0.1.0.0\0"
         END
     END
     BLOCK "VarFileInfo"
     BEGIN
-        VALUE "Translation", 0x0409, 1200
+        VALUE "Translation", 0x0409, 1252
     END
 END
