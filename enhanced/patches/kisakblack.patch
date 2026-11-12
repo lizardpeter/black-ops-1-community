@@ -169,6 +169,61 @@
              break;
          case 1:
              vidConfig.aspectRatioWindow = (1.0f + (1.0f / 3.0f));
+@@ -1049,39 +1036,21 @@
+ 
+ void __cdecl R_SetShadowmapFormats_DX(unsigned int adapterIndex)
+ {
+-    _D3DFORMAT colorFormat; // [esp+0h] [ebp-30h]
+-    unsigned int formatIndex; // [esp+8h] [ebp-28h]
+-    _D3DFORMAT depthFormat; // [esp+Ch] [ebp-24h]
+-    _D3DFORMAT formats[4][2]; // [esp+10h] [ebp-20h]
+-
+-    *(_QWORD *)&formats[0][0] = 0x170000004BLL;
+-    *(_QWORD *)&formats[1][0] = 0x170000004BLL;
+-    *(_QWORD *)&formats[2][0] = 0x160000004BLL;
+-    *(_QWORD *)&formats[3][0] = 0x150000004BLL;
+-
+-    if ( NV_UseShadowNullColorRenderTarget() )
+-        formats[0][0] = (_D3DFORMAT)1280070990;
+-
+-    for ( formatIndex = 0; formatIndex < 4; ++formatIndex )
+-    {
+-        depthFormat = formats[formatIndex][0];
+-        colorFormat = formats[formatIndex][1];
+-        if ( (!NV_UseShadowNullColorRenderTarget()
+-             || colorFormat != 1280070990
+-             || !(dx.d3d9->CheckDeviceFormat(adapterIndex, D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 1, (D3DRESOURCETYPE)1, (D3DFORMAT)1280070990))
+-            && !dx.d3d9->CheckDepthStencilMatch(
+-                        adapterIndex,
+-                        D3DDEVTYPE_HAL,
+-                        D3DFMT_X8R8G8B8,
+-                        colorFormat,
+-                        depthFormat)
+-            && !dx.d3d9->CheckDeviceFormat(
+-                        adapterIndex,
+-                        D3DDEVTYPE_HAL,
+-                        D3DFMT_X8R8G8B8,
+-                        2u,
+-                        D3DRTYPE_TEXTURE,
+-                        depthFormat) ))
++    constexpr auto depthFormat = D3DFMT_D24S8;
++    const auto nullColor = static_cast<D3DFORMAT>(MAKEFOURCC('N', 'U', 'L', 'L'));
++    const D3DFORMAT colors[] = {nullColor, D3DFMT_R5G6B5, D3DFMT_X8R8G8B8, D3DFMT_A8R8G8B8};
++    constexpr auto adapterFormat = D3DFMT_X8R8G8B8;
++
++    const bool depthTextureSupported = SUCCEEDED(dx.d3d9->CheckDeviceFormat(
++        adapterIndex, D3DDEVTYPE_HAL, adapterFormat, D3DUSAGE_DEPTHSTENCIL, D3DRTYPE_TEXTURE, depthFormat));
++    for (const auto colorFormat : colors)
++    {
++        if (depthTextureSupported &&
++            (colorFormat != nullColor || NV_UseShadowNullColorRenderTarget()) &&
++            SUCCEEDED(dx.d3d9->CheckDeviceFormat(adapterIndex, D3DDEVTYPE_HAL, adapterFormat,
++                       D3DUSAGE_RENDERTARGET, D3DRTYPE_SURFACE, colorFormat)) &&
++            SUCCEEDED(dx.d3d9->CheckDepthStencilMatch(adapterIndex, D3DDEVTYPE_HAL,
++                       adapterFormat, colorFormat, depthFormat)))
+         {
+             gfxMetrics.shadowmapFormatPrimary = depthFormat;
+             gfxMetrics.shadowmapFormatSecondary = colorFormat;
 --- a/src/win32/win_gamepad.cpp
 +++ b/src/win32/win_gamepad.cpp
 @@ -22,9 +22,6 @@
