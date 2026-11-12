@@ -23,6 +23,10 @@ cmake --build --preset enhanced-release
 
 For an extracted SDK, append `-DDXSDK_DIR=C:/path/to/DXSDK` to each configure command. The directory should contain `Include/d3dx9.h` and `Lib/x86`. For Debug, use the `faithful-debug` or `enhanced-debug` build preset.
 
-The executables land in `build/faithful/Release` and `build/enhanced/Release`. To launch either build, use the game data from your own Steam installation and stage the runtime DLLs listed in the [upstream instructions](https://github.com/SwagSoftware/KisakBlack/blob/6276ed21bc6fbaeab6f2ac6357ff22b82d3c4487/README.md) alongside the executable. Compilation can run before staging game data.
+The executables land in `build/faithful/Release` and `build/enhanced/Release`. Both builds use retail BO1 assets. For the faithful executable, follow the [upstream runtime instructions](https://github.com/SwagSoftware/KisakBlack/blob/6276ed21bc6fbaeab6f2ac6357ff22b82d3c4487/README.md). For the enhanced executable, install the June 2010 DirectX runtime, then run from the directory containing the game data. The enhanced executable runs local multiplayer without the Steam, Bink, or XInput DLLs.
+
+```powershell
+.\BlackOpsMP-Community.exe +set r_fullscreen 0 +set g_gametype dm +map mp_nuked
+```
 
 See [STATUS.md](STATUS.md) for verification scope.
