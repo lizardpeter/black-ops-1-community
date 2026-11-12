@@ -2,7 +2,7 @@ target_sources(KisakBlack PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/version.rc")
 set_target_properties(KisakBlack PROPERTIES OUTPUT_NAME "BlackOpsMP-Community")
 
 find_package(Git REQUIRED)
-set(upstream_dir "${PROJECT_SOURCE_DIR}/upstream/kisakblack")
+set(upstream_dir "${bo1_engine_source}")
 set(overlay_dir "${CMAKE_CURRENT_BINARY_DIR}/kisakblack")
 set(overlay_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/kisakblack.patch")
 set(overlay_units

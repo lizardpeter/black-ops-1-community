@@ -1,0 +1,584 @@
+--- a/src/physics/phys_mem_new.h
++++ b/src/physics/phys_mem_new.h
+@@ -1,20 +1,6 @@
+ #pragma once
+ #include "phys_local.h"
+ #include <tl/tl_system.h>
+-
+-struct tagged_void_pointer_t // sizeof=0x8
+-{                                       // XREF: phys_slot_pool/r
+-    void *m_ptr;
+-    unsigned int m_tag;
+-
+-    tagged_void_pointer_t() noexcept
+-        : m_ptr(nullptr), m_tag(0) {
+-    }
+-
+-    tagged_void_pointer_t(void *ptr, unsigned int tag) noexcept
+-        : m_ptr(ptr), m_tag(tag) {
+-    }
+-};
+ 
+ struct alignas(8) phys_slot_pool // sizeof=0x18
+ {                                       // XREF: phys_memory_manager/r
+@@ -23,7 +9,8 @@
+         phys_slot_pool *m_slot_pool_owner;
+         void *m_allocation_owner;
+     };
+-    volatile tagged_void_pointer_t m_first_free_slot;
++    char *m_first_free_slot;
++    minspec_mutex m_free_slot_mutex;
+     unsigned int m_map_key;
+     phys_slot_pool *m_hash_next;
+     volatile unsigned int m_total_slot_count;
+@@ -46,7 +33,6 @@
+     void  free_slot(unsigned __int8 *slot);
+     char *allocate_slot();
+ };
+-static_assert(sizeof(phys_slot_pool) == 0x18);
+ 
+ struct phys_memory_manager // sizeof=0x3D0
+ {
+@@ -70,12 +56,11 @@
+ 
+     phys_memory_manager(char *memory_buffer, int memory_buffer_size);
+ 
+-    int allocate(unsigned int size, unsigned int alignment);
++    char *allocate(unsigned int size, unsigned int alignment);
+     phys_slot_pool *allocate_slot_pool();
+     phys_slot_pool *get_slot_pool(unsigned int slot_size, unsigned int slot_alignment);
+ };
+ 
+-static_assert(sizeof(phys_memory_manager) == 0x3D0);
+ 
+ void __cdecl phys_memory_manager_term();
+ void __cdecl ppu_pmm_get_linear_buffer(char ***linear_buffer_cur, char **linear_buffer_end);
+--- a/src/physics/phys_mem_new.cpp
++++ b/src/physics/phys_mem_new.cpp
+@@ -2,6 +2,8 @@
+ 
+ #include <Windows.h> // interlockedexchange
+ #include <new>
++#include <cstdint>
++#include <cstring>
+ #include <universal/q_shared.h>
+ 
+ void *g_phys_memory_buffer;
+@@ -17,8 +19,8 @@
+ 
+ void phys_slot_pool::init(unsigned int slot_size, unsigned int slot_alignment)
+ {
+-    this->m_first_free_slot.m_ptr = 0;
+-    this->m_first_free_slot.m_tag = 0;
++    this->m_first_free_slot = nullptr;
++    this->m_free_slot_mutex.m_token = 0;
+     this->m_map_key = phys_slot_pool::encode_size_alignment(slot_size, slot_alignment);
+     this->m_total_slot_count = 0;
+     this->m_allocated_slot_count = 0;
+@@ -40,36 +42,28 @@
+     ;
+ }
+ 
+-int phys_memory_manager::allocate(unsigned int size, unsigned int alignment)
+-{
+-    unsigned int v3; // edx
+-    unsigned int v4; // eax
+-    volatile unsigned __int32 *p_m_buffer_cur; // edi
+-    signed __int32 v6; // esi
+-    int v7; // edx
+-    unsigned int v9; // [esp+Ch] [ebp-8h]
+-    //phys_memory_manager *v10; // [esp+10h] [ebp-4h]
+-    unsigned int alignmenta; // [esp+20h] [ebp+Ch]
+-
+-    v3 = alignment - 1;
+-    v4 = ~(alignment - 1);
+-    //v10 = this;
+-    alignmenta = alignment - 1;
+-    v9 = v4;
+-    p_m_buffer_cur = (volatile unsigned __int32 *)&this->m_buffer_cur;
+-    while ( 1 )
+-    {
+-        v7 = v4 & (*p_m_buffer_cur + v3);
+-        if ( (char *)(v7 + size) > this->m_buffer_end )
+-            return 0;
+-        v6 = *p_m_buffer_cur;
+-        if ( _InterlockedCompareExchange(p_m_buffer_cur, v7 + size, v6) == v6 )
+-            break;
+-        //this = v10;
+-        v3 = alignmenta;
+-        v4 = v9;
+-    }
+-    return v7;
++char *phys_memory_manager::allocate(unsigned int size, unsigned int alignment)
++{
++    if (!alignment || (alignment & (alignment - 1)) != 0)
++        return nullptr;
++
++    auto *cursor = reinterpret_cast<void *volatile *>(&m_buffer_cur);
++    const std::uintptr_t mask = alignment - 1;
++    const auto end = reinterpret_cast<std::uintptr_t>(m_buffer_end);
++    auto *current = InterlockedCompareExchangePointer(cursor, nullptr, nullptr);
++    for (;;)
++    {
++        const auto address = reinterpret_cast<std::uintptr_t>(current);
++        const auto padding = (0 - address) & mask;
++        if (address > end || padding > end - address || size > end - address - padding)
++            return nullptr;
++        const auto aligned = address + padding;
++        auto *observed = InterlockedCompareExchangePointer(
++            cursor, reinterpret_cast<void *>(aligned + size), current);
++        if (observed == current)
++            return reinterpret_cast<char *>(aligned);
++        current = observed;
++    }
+ }
+ 
+ phys_slot_pool *phys_memory_manager::allocate_slot_pool()
+@@ -77,7 +71,6 @@
+     minspec_mutex *p_m_slot_pool_allocate_mutex; // ebx
+     int m_list_preallocated_slot_pools_count; // eax
+     phys_slot_pool *v4; // edi
+-    int v6; // eax
+     volatile unsigned int Target; // [esp+Ch] [ebp-4h] BYREF
+ 
+     p_m_slot_pool_allocate_mutex = &this->m_slot_pool_allocate_mutex;
+@@ -88,10 +81,10 @@
+     m_list_preallocated_slot_pools_count = this->m_list_preallocated_slot_pools_count;
+     if ( m_list_preallocated_slot_pools_count >= 28 )
+     {
+-        //v6 = phys_memory_manager::allocate(this, 0x18u, 8u);
+-        v6 = this->allocate(24, 8);
+-        ++this->m_list_slot_pool_count;
+-        v4 = (phys_slot_pool *)v6;
++        auto *storage = this->allocate(sizeof(phys_slot_pool), alignof(phys_slot_pool));
++        v4 = storage ? new (storage) phys_slot_pool : nullptr;
++        if (v4)
++            ++this->m_list_slot_pool_count;
+     }
+     else
+     {
+@@ -115,6 +108,8 @@
+     minspec_read_write_mutex *p_m_slot_pool_map_mutex; // [esp+10h] [ebp-4h]
+     unsigned int slot_sizea; // [esp+1Ch] [ebp+8h]
+ 
++    if (!slot_alignment || (slot_alignment & (slot_alignment - 1)) != 0 || slot_alignment > 0xFFFF)
++        return nullptr;
+     if ( slot_alignment < 4 && _tlAssert("source/phys_mem_new.cpp", 204, "slot_alignment >= 4", "") )
+         __debugbreak();
+     if ( slot_size % slot_alignment
+@@ -131,9 +126,13 @@
+     {
+         __debugbreak();
+     }
+-    slot_sizea = slot_size + 8;
+-    //v5 = phys_slot_pool::encode_size_alignment(slot_size + 8, slot_alignment);
+-    v5 = phys_slot_pool::encode_size_alignment(slot_size + 8, slot_alignment);
++    constexpr unsigned int slotMask = alignof(phys_slot_pool::extra_info) - 1;
++    if (slot_size > 0xFFFF - slotMask - sizeof(phys_slot_pool::extra_info))
++        return nullptr;
++    slot_sizea = ((slot_size + slotMask) & ~slotMask) + sizeof(phys_slot_pool::extra_info);
++    if (slot_alignment < alignof(phys_slot_pool::extra_info))
++        slot_alignment = alignof(phys_slot_pool::extra_info);
++    v5 = phys_slot_pool::encode_size_alignment(slot_sizea, slot_alignment);
+     p_m_slot_pool_map_mutex = &this->m_slot_pool_map_mutex;
+     //minspec_read_write_mutex::ReadLock(&this->m_slot_pool_map_mutex);
+     this->m_slot_pool_map_mutex.ReadLock();
+@@ -159,13 +158,11 @@
+         {
+             //i = phys_memory_manager::allocate_slot_pool(this);
+             i = this->allocate_slot_pool();
+-            i->m_first_free_slot.m_ptr = 0;
+-            i->m_first_free_slot.m_tag = 0;
+-            i->m_map_key = phys_slot_pool::encode_size_alignment(slot_sizea, slot_alignment);
+-            i->m_total_slot_count = 0;
+-            i->m_allocated_slot_count = 0;
+-            //minspec_hash_table<phys_slot_pool,64>::add(p_m_slot_pool_map, v5, i);
+-            p_m_slot_pool_map->add(v5, i);
++            if (i)
++            {
++                i->init(slot_sizea, slot_alignment);
++                p_m_slot_pool_map->add(v5, i);
++            }
+         }
+         //minspec_read_write_mutex::WriteUnlock(p_m_slot_pool_map_mutex);
+         p_m_slot_pool_map_mutex->WriteUnlock();
+@@ -197,7 +194,7 @@
+     //slot_pool = phys_memory_manager::get_slot_pool(g_phys_memory_manager, size, alignment);
+     slot_pool = g_phys_memory_manager->get_slot_pool(size, alignment);
+     //return phys_slot_pool::allocate_slot(slot_pool, (unsigned int)&savedregs);
+-    return slot_pool->allocate_slot();
++    return slot_pool ? slot_pool->allocate_slot() : nullptr;
+ }
+ 
+ void __cdecl PMM_FREE(unsigned __int8 *ptr, unsigned int size, unsigned int alignment)
+@@ -207,7 +204,8 @@
+     //slot_pool = phys_memory_manager::get_slot_pool(g_phys_memory_manager, size, alignment);
+     slot_pool = g_phys_memory_manager->get_slot_pool(size, alignment);
+     //phys_slot_pool::free_slot(slot_pool, (unsigned int)&savedregs, ptr);
+-    slot_pool->free_slot(ptr);
++    if (slot_pool)
++        slot_pool->free_slot(ptr);
+ }
+ 
+ char *__cdecl PSP_ALLOC(phys_slot_pool *slot_pool)
+@@ -229,13 +227,14 @@
+     phys_slot_pool *slot_pool; // eax
+ 
+     slot_pool = g_phys_memory_manager->get_slot_pool(size, alignment);
+-    slot_pool->validate_slot(ptr);
++    if (slot_pool && ptr)
++        slot_pool->validate_slot(ptr);
+ }
+ 
+ phys_memory_manager::phys_memory_manager(char *memory_buffer, int memory_buffer_size)
+ {
+     this->m_slot_pool_map_mutex.m_count = 1;
+-    memset(&this->m_slot_pool_map, 0, 0x100u);
++    memset(this->m_slot_pool_map.m_hash_table, 0, sizeof(this->m_slot_pool_map.m_hash_table));
+     this->m_slot_pool_map.m_mod = 1;
+     this->m_slot_pool_map.m_highest_collision = 0;
+     this->m_slot_pool_map.m_total_collisions = 0;
+@@ -244,7 +243,7 @@
+     this->m_buffer_cur = memory_buffer;
+     this->m_buffer_end = &memory_buffer[memory_buffer_size];
+     this->m_list_slot_pool_count = 0;
+-    memset(&this->m_slot_pool_map, 0, 0x100u);
++    memset(this->m_slot_pool_map.m_hash_table, 0, sizeof(this->m_slot_pool_map.m_hash_table));
+     this->m_slot_pool_map.m_highest_collision = 0;
+     this->m_slot_pool_map.m_total_collisions = 0;
+     this->m_slot_pool_map.m_mod = 1;
+@@ -253,8 +252,6 @@
+ 
+ void __cdecl phys_memory_manager_init(void *const memory_buffer, int memory_buffer_size)
+ {
+-    unsigned int v2; // ecx
+-
+     if ( g_phys_memory_buffer
+         && _tlAssert("source/phys_mem_new.cpp", 237, "g_phys_memory_buffer == NULL", "") )
+     {
+@@ -270,18 +267,19 @@
+     {
+         __debugbreak();
+     }
+-    v2 = ((unsigned int)memory_buffer + 7) & 0xFFFFFFF8;
++    if (!memory_buffer || memory_buffer_size <= 0)
++        return;
++    const auto address = reinterpret_cast<std::uintptr_t>(memory_buffer);
++    const auto padding = (0 - address) & (alignof(phys_memory_manager) - 1);
++    const auto headerSize = padding + sizeof(phys_memory_manager);
++    if (headerSize > static_cast<unsigned int>(memory_buffer_size))
++        return;
++
+     g_phys_memory_buffer = memory_buffer;
+     g_phys_memory_buffer_size = memory_buffer_size;
+-    g_phys_memory_manager = (phys_memory_manager *)v2;
+-    if (v2)
+-    {
+-        new ((void*)v2) phys_memory_manager((char*)(v2 + sizeof(phys_memory_manager)), (int)(((unsigned int)memory_buffer + memory_buffer_size) - v2 - sizeof(phys_memory_manager)));
+-        //phys_memory_manager::phys_memory_manager(
+-        //    (phys_memory_manager *)v2,
+-        //    (char *)(v2 + 976),
+-        //    (int)memory_buffer + memory_buffer_size - v2 - 976);
+-    }
++    auto *bytes = static_cast<char *>(memory_buffer);
++    g_phys_memory_manager = new (bytes + padding) phys_memory_manager(
++        bytes + headerSize, memory_buffer_size - static_cast<int>(headerSize));
+ }
+ 
+ void phys_slot_pool::extra_info_init(char *slot)
+@@ -309,8 +307,7 @@
+             }
+         }
+ 
+-        slot = 0;
+-        InterlockedExchange((volatile unsigned int *)&slot, 0);
++
+     }
+ }
+ 
+@@ -368,10 +365,8 @@
+         __debugbreak();
+     }
+ 
+-    if ((phys_slot_pool *)_InterlockedCompareExchange(
+-        (volatile unsigned __int32 *)&ei->m_allocation_owner,
+-        0xFEDCBA98,
+-        (signed __int32)this) != this
++    if (InterlockedCompareExchangePointer(
++        &ei->m_allocation_owner, reinterpret_cast<void *>(0xFEDCBA98u), this) != this
+         && _tlAssert("source/phys_mem_new.cpp", 312, "retv", "internal error."))
+     {
+         __debugbreak();
+@@ -460,10 +455,9 @@
+         __debugbreak();
+     }
+ 
+-    if ((phys_slot_pool *)_InterlockedCompareExchange(
+-        (volatile unsigned __int32 *)&ei->m_allocation_owner,
+-        (signed __int32)this,
+-        0xFEDCBA98) != (phys_slot_pool *)0xFEDCBA98
++    if (InterlockedCompareExchangePointer(
++        &ei->m_allocation_owner, this, reinterpret_cast<void *>(0xFEDCBA98u)) !=
++        reinterpret_cast<void *>(0xFEDCBA98u)
+         && _tlAssert(
+             "source/phys_mem_new.cpp",
+             332,
+@@ -533,7 +527,7 @@
+     {
+         __debugbreak();
+     }
+-    if ((unsigned int)ei->m_allocation_owner != 0xFEDCBA98
++    if (ei->m_allocation_owner != reinterpret_cast<void *>(0xFEDCBA98u)
+         && _tlAssert(
+             "source/phys_mem_new.cpp",
+             347,
+@@ -547,133 +541,32 @@
+ 
+ void phys_slot_pool::free_slot(unsigned __int8 *slot)
+ {
+-#if 0
+-    unsigned __int8 *v3; // edi
+-    signed __int64 m_first_free_slot; // [esp-Ch] [ebp-1Ch]
+-    tagged_void_pointer_t first_slot; // [esp+0h] [ebp-10h] BYREF
+-    //void *v7; // [esp+8h] [ebp-8h]
+-    //void *retaddr; // [esp+10h] [ebp+0h]
+-
+-    //first_slot.m_tag = a2;
+-    //v7 = retaddr;
+-    v3 = slot;
+-    if ( !slot && _tlAssert("source/phys_mem_new.cpp", 445, "slot", "no support support for freeing NULL slots.") )
+-        __debugbreak();
+-    phys_slot_pool::extra_info_free(slot);
+-    while ( 1 )
+-    {
+-        m_first_free_slot = (signed __int64)this->m_first_free_slot;
+-        *(unsigned int *)v3 = this->m_first_free_slot.m_ptr;
+-        first_slot.m_ptr = 0;
+-        InterlockedExchange((volatile int *)&first_slot, 0);
+-        if ( _InterlockedCompareExchange64(
+-                     (volatile signed __int64 *)this,
+-                     __SPAIR64__(HIDWORD(m_first_free_slot) + 1, (unsigned int)v3),
+-                     m_first_free_slot) == m_first_free_slot )
+-            break;
+-        v3 = slot;
+-    }
+-
+     if (!slot)
+-    {
+-        if (_tlAssert("source/phys_mem_new.cpp",
+-            445,
+-            "slot",
+-            "no support support for freeing NULL slots."))
+-        {
+-            __debugbreak();
+-        }
+-    }
+-#else
+-    signed __int64 cur, next;
+-
+-    if (!slot && _tlAssert("source/phys_mem_new.cpp", 445, "slot", "no support for freeing NULL slots."))
+-        __debugbreak();
+-
+-    this->extra_info_free(slot);
+-
+-    while (1)
+-    {
+-        cur = *(volatile signed __int64 *)&this->m_first_free_slot;
+-        *(unsigned int *)slot = LODWORD(cur); // link slot->next = current head
+-        next = __SPAIR64__(HIDWORD(cur) + 1, (unsigned int)slot);
+-        if (_InterlockedCompareExchange64(
+-            (volatile signed __int64 *)&this->m_first_free_slot,
+-            next,
+-            cur) == cur)
+-            break;
+-        // CAS failed, retry
+-    }
+-#endif
+-}
+-
+-char * phys_slot_pool::allocate_slot()
+-{
+-#if 0
+-    char **m_ptr; // edi
+-    char *v3; // esi
+-    char *v5; // esi
+-    char *v6; // [esp-8h] [ebp-18h]
+-    int v7; // [esp-4h] [ebp-14h] BYREF
+-    tagged_void_pointer_t first_slot; // [esp+0h] [ebp-10h]
+-    void *v9; // [esp+8h] [ebp-8h]
+-    void *retaddr; // [esp+10h] [ebp+0h]
+-
+-    first_slot.m_tag = a2;
+-    v9 = retaddr;
+-    m_ptr = (char **)this;
+-    for ( first_slot.m_ptr = this; ; m_ptr = (char **)first_slot.m_ptr )
+-    {
+-        v3 = *m_ptr;
+-        v6 = m_ptr[1];
+-        if ( !*m_ptr )
+-            break;
+-        v7 = 0;
+-        InterlockedExchange(&v7, 0);
+-        if ( _InterlockedCompareExchange64(
+-                     (volatile signed __int64 *)m_ptr,
+-                     __SPAIR64__((unsigned int)(v6 + 1), *(unsigned int *)v3),
+-                     __SPAIR64__((unsigned int)v6, (unsigned int)v3)) == __PAIR64__((unsigned int)v6, (unsigned int)v3) )
+-        {
+-            phys_slot_pool::extra_info_allocate((phys_slot_pool *)first_slot.m_ptr, v3);
+-            return v3;
+-        }
+-    }
+-    v5 = (char *)phys_memory_manager::allocate(
+-                                 g_phys_memory_manager,
+-                                 (unsigned __int16)m_ptr[2],
+-                                 (unsigned int)m_ptr[2] >> 16);
+-    phys_slot_pool::extra_info_init((phys_slot_pool *)m_ptr, v5);
+-    return v5;
+-#else // aislop
+-    signed __int64 cur, next;
+-    char *v3;
+-
+-    while (1)
+-    {
+-        cur = *(volatile signed __int64 *)&this->m_first_free_slot;
+-        v3 = (char *)LODWORD(cur);
+-        if (!v3)
+-            break; // free list empty, fall through to fresh alloc
+-
+-        next = __SPAIR64__(HIDWORD(cur) + 1, *(unsigned int *)v3);
+-        if (_InterlockedCompareExchange64(
+-            (volatile signed __int64 *)&this->m_first_free_slot,
+-            next,
+-            cur) == cur)
+-        {
+-            this->extra_info_allocate(v3);
+-            return v3;
+-        }
+-        // CAS failed, retry
+-    }
+-
+-    // No free slots — allocate fresh from memory manager
+-    char *v5 = (char *)g_phys_memory_manager->allocate(
+-        (unsigned __int16)this->m_map_key,
+-        (unsigned int)this->m_map_key >> 16);
+-    this->extra_info_init(v5);
+-    return v5;
+-#endif
+-}
+-
++        return;
++    extra_info_free(slot);
++
++    m_free_slot_mutex.Lock();
++    std::memcpy(slot, &m_first_free_slot, sizeof(m_first_free_slot));
++    m_first_free_slot = reinterpret_cast<char *>(slot);
++    m_free_slot_mutex.Unlock();
++}
++
++char *phys_slot_pool::allocate_slot()
++{
++    m_free_slot_mutex.Lock();
++    auto *slot = m_first_free_slot;
++    if (slot)
++        std::memcpy(&m_first_free_slot, slot, sizeof(m_first_free_slot));
++    m_free_slot_mutex.Unlock();
++
++    if (slot)
++    {
++        extra_info_allocate(slot);
++        return slot;
++    }
++
++    slot = g_phys_memory_manager->allocate(
++        static_cast<unsigned __int16>(m_map_key), m_map_key >> 16);
++    extra_info_init(slot);
++    return slot;
++}
+--- a/src/physics/phys_local.h
++++ b/src/physics/phys_local.h
+@@ -247,7 +247,6 @@
+     int touched;
+     chull_t *next_list;
+ };
+-static_assert(sizeof(chull_t) == 0x20);
+ 
+ struct minspec_mutex // sizeof=0x4
+ {                                       // XREF: .data:minspec_mutex g_render_mutex/r
+--- a/src/physics/phys_colgeom.h
++++ b/src/physics/phys_colgeom.h
+@@ -253,7 +253,6 @@
+         virtual bool is_walkable(const phys_vec3 *hit_point, const phys_vec3 *up) override;
+         virtual const cbrush_t *get_brush() const override;
+ };
+-static_assert(sizeof(gjk_aabb_t) == 128);
+ 
+ struct BrushWrapper // sizeof=0x60
+ {
+@@ -338,7 +337,6 @@
+         // is_walkable() - gjk_base_t
+         // get_brush() - gjk_base_t
+ };
+-static_assert(sizeof(gjk_obb_t) == 160);
+ 
+ struct __declspec(align(8)) gjk_brush_t : gjk_base_t // sizeof=0x60
+ {
+@@ -397,7 +395,6 @@
+         virtual bool is_walkable(const phys_vec3 *hit_point, const phys_vec3 *up) override;
+         virtual const cbrush_t *get_brush() const override;
+ };
+-static_assert(sizeof(gjk_brush_t) == 96);
+ 
+ struct CollisionBorder // sizeof=0x1C
+ {
+@@ -492,7 +489,6 @@
+         virtual bool is_walkable(const phys_vec3 *hit_point, const phys_vec3 *up) override;
+         // get_brush() - gjk_base_t
+ };
+-static_assert(sizeof(gjk_partition_t) == 112);
+ 
+ struct gjk_double_sphere_t : gjk_base_t // sizeof=0x90
+ {
+@@ -550,7 +546,6 @@
+         // is_walkable() - gjk_base_t
+         // get_brush() - gjk_base_t
+ };
+-static_assert(sizeof(gjk_double_sphere_t) == 144);
+ 
+ struct gjk_cylinder_t : gjk_base_t // sizeof=0xA0
+ {
+@@ -613,7 +608,6 @@
+ 
+         const phys_vec3 * get_dims(phys_vec3 *result) const;
+ };
+-static_assert(sizeof(gjk_cylinder_t) == 160);
+ 
+ struct __declspec(align(8)) gjk_polygon_cylinder_t : gjk_base_t // sizeof=0x80
+ {                                                                             // XREF: ?render_gjkcc_collision@@YAXAAY02$$CBM00@Z/r
+@@ -735,7 +729,6 @@
+ 
+         //gjk_polygon_cylinder_t::poly_verts gjk_polygon_cylinder_t::s_poly_verts
+ };
+-static_assert(sizeof(gjk_polygon_cylinder_t) == 128);
+ 
+ struct gjk_geom_list_t // sizeof=0x8
+ {
+--- a/src/physics/phys_convex_hull.cpp
++++ b/src/physics/phys_convex_hull.cpp
+@@ -712,7 +712,7 @@
+ 
+ chull_t *__cdecl create_chull(phys_convex_hull *pch)
+ {
+-    chull_t *hull = (chull_t *)PMM_ALLOC(sizeof(chull_t), 4u);
++    chull_t *hull = (chull_t *)PMM_ALLOC(sizeof(chull_t), alignof(chull_t));
+     hull->nverts = pch->m_convex_hull_vert_list.m_alloc_count;
+     hull->verts = (phys_vec3 *)PMM_ALLOC(sizeof(phys_vec3) * hull->nverts, 16);
+     hull->ninds = 3 * pch->m_convex_hull_triangle_list.m_alloc_count;
+@@ -785,7 +785,7 @@
+         next = first->next;
+         PMM_FREE((unsigned __int8 *)first->verts, 16 * first->nverts, 0x10u);
+         PMM_FREE((unsigned __int8 *)first->inds, (2 * first->ninds + 3) & 0xFFFFFFFC, 4u);
+-        PMM_FREE((unsigned __int8 *)first, 0x20u, 4u);
++        PMM_FREE((unsigned __int8 *)first, sizeof(chull_t), alignof(chull_t));
+         first = next;
+     }
+ }
