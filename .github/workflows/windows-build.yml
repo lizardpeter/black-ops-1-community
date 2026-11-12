@@ -90,8 +90,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $dlls = $imports | ForEach-Object { if ($_ -match '^\s+(\S+\.dll)\s*$') { $Matches[1] } }
           if (!$dlls) { throw 'No DLL imports found' }
-          if ($dlls -match '^xinput.*\.dll$') {
-            Write-Host '::error::Enhanced build unexpectedly imports XInput'
+          $removed = $dlls -match '^(xinput.*|steam.*|tier0_s.*|vstdlib_s.*|bink.*)\.dll$'
+          if ($removed) {
+            Write-Host "::error::Enhanced build unexpectedly imports $($removed -join ', ')"
             exit 1
           }
           Write-Host "::notice title=Executable DLL imports::$($dlls -join ', ')"

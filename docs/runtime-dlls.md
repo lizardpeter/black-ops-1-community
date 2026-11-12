@@ -23,3 +23,11 @@ Game data still comes from a local BO1 installation. Use the pinned KisakBlack s
 The import tables omit `vpx.dll`. The linked static VPX archive supplies the encoder. A live run is still needed to log the full set of modules loaded by Steam, COM, and vendor libraries.
 
 The enhanced controller-free build removes the XInput link and checks its PE imports in CI. The import list above records the earlier baseline. Steam, Bink, and DirectX migration remain separate build changes. See [native Windows audio](audio.md) for the DirectSound and XAudio2 paths.
+
+## Local enhanced build
+
+The current enhanced source excludes the Steam client, server, and friends implementations, removes Steam startup, and uses local profile data. Multiplayer connection handling accepts engine loopback and bots. The Steam-authenticated remote connection flow is disabled. The enhanced link no longer requests `steam_api.lib`.
+
+The enhanced source also excludes the legacy cinematic backend and `binkw32.lib`. Cinematic requests complete without playback during bring-up. Original movie playback still needs a statically linked decoder, frame upload, and PCM integration. Voice chat also uses DirectSound, so retiring cinematic DirectSound alone does not remove the audio DLL.
+
+The import audit rejects Steam, Bink, and XInput DLLs in the enhanced executable when Windows CI runs. The Win32 build still needs legacy DirectX components, and the static CRT/codec migration needs a dependency audit of the final link. The target is a deployable game executable with ordinary Windows system and GPU driver dependencies and local game data.

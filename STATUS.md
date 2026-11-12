@@ -8,3 +8,7 @@
 ## Multiplayer enhancements
 
 See [the patch records](records/patches.tsv) and [source paths for input, FOV, frame timing, and rendering](docs/modernization.md). Raw mouse motion and FOV changes need a live game check with local assets.
+
+## Local executable bring-up
+
+The enhanced sources now select a local platform backend and exclude the Steam and Bink implementations. The temporary cinematic backend skips movies. The Windows link and launch of this change set are pending, along with native movie playback, legacy graphics and audio removal, and the complete x64 executable.

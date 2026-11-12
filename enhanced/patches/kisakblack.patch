@@ -265,3 +265,252 @@
          Dvar_SetBool((dvar_s *)input_invertPitch, gamerSettings[controllerIndex].invertPitch);
          Dvar_SetFloat((dvar_s *)input_viewSensitivity, gamerSettings[controllerIndex].viewSensitivity);
          Dvar_SetInt((dvar_s *)team_indicator, gamerSettings[controllerIndex].team_indicator);
+--- a/src/win32/win_main.cpp
++++ b/src/win32/win_main.cpp
+@@ -903,10 +903,6 @@
+                 __debugbreak();
+             }
+ 
+-            // LWSS ADD: Steam Init
+-            Steam_Init();
+-            // LWSS END
+-
+             Com_Init(sys_cmdline);
+ 
+             if (!IsDedicatedServer())
+--- a/src/client_mp/cl_main_mp.cpp
++++ b/src/client_mp/cl_main_mp.cpp
+@@ -1964,7 +1964,6 @@
+ 
+ void __cdecl CL_CheckForResend(int localClientNum)
+ {
+-    __int64 Uid; // rax
+     const char *v6; // eax
+     unsigned int RandomUInt; // eax
+ #ifdef KISAK_DW
+@@ -1976,7 +1975,6 @@
+     netadr_t v12; // [esp-18h] [ebp-D68h]
+     int v15; // [esp-4h] [ebp-D54h]
+     unsigned __int64 ourUserID; // [esp+D8h] [ebp-C78h] BYREF
+-    char clientSteamIDStr[32]; // [esp+E4h] [ebp-C6Ch] BYREF
+     connstate_t connstate; // [esp+104h] [ebp-C4Ch]
+     char info[1028]; // [esp+108h] [ebp-C48h] BYREF
+     int pktlen; // [esp+50Ch] [ebp-844h] BYREF
+@@ -1986,19 +1984,23 @@
+     clientConnection_t *clc; // [esp+93Ch] [ebp-414h]
+     char pkt[1036]; // [esp+940h] [ebp-410h] BYREF
+ 
+-    unsigned char *pSteamClientTicket = NULL;
+-    uint32 steamClientTicketSize = 0;
+-    char steamIDbuf[25];
+-    unsigned char steamTicketBase64[2048]{ 0 };
+-
+-#ifdef _DEBUG
+-    unsigned char steamTicketDecodeBuf[1024]{ 0 };
+-#endif
+-
+     connstate = CL_GetLocalClientConnectionState(localClientNum);
+     if ( connstate == CA_CONNECTING || connstate == CA_CHALLENGING || connstate == CA_SENDINGSTATS )
+     {
+         clc = CL_GetLocalClientConnection(localClientNum);
++        if (!NET_IsLocalAddress(clc->serverAddress))
++        {
++            Com_PrintWarning(14, "This build supports local multiplayer only.\n");
++            CL_Disconnect(localClientNum, 0);
++            return;
++        }
++        if (connstate == CA_CONNECTING)
++        {
++            // Loopback uses the existing local connection path without a remote challenge.
++            CL_SetLocalClientConnectionState(localClientNum, CA_CHALLENGING);
++            clc->challenge = 0;
++            connstate = CA_CHALLENGING;
++        }
+         if ( connstate == CA_SENDINGSTATS )
+         {
+             if ( cls.realtime - clc->lastPacketSentTime < 100 )
+@@ -2012,49 +2014,11 @@
+         {
+             clc->connectTime = cls.realtime;
+             ++clc->connectPacketCount;
+-            if ( connstate == CA_CONNECTING )
+-            {
+-#ifdef KISAK_DW
+-                if ( dwGetAddrHandleConnectionTaskStatus(clc->serverAddress.addrHandleIndex) )
+-#endif
+-                {
+-                    //if (net_lanauthorize->current.enabled || !Sys_IsLANAddress(clc->serverAddress))
+-                    //{
+-                    //    //BLOPS_NULLSUB();
+-                    //    // IN COD4: CL_RequestAuthorization(localClientNum);
+-                    //}
+-                    
+-                    //strcpy(pkt, "getchallenge");
+-                    //pktlen = &pkt[strlen(pkt) + 1] - &pkt[1];
+-                    //PbClientConnecting(1, pkt, &pktlen);
+-                    //CL_BuildMd5StrFromCDKey(md5Str);
+-
+-
+-                    // NOTE: In Black Ops, the server does not give 2 shits about the CD Key.
+-                    // Go look at SV_GetChallenge(), it's not even read. This is a leftover.
+-                    //const char *dummy = "abc";
+-                    //NET_OutOfBandPrint(Com_LocalClient_GetNetworkID(localClientNum), serverAddress, va("getchallenge 0 \"%s\"", md5Str));
+-                    //NET_OutOfBandPrint(Com_LocalClient_GetNetworkID(localClientNum), clc->serverAddress, va("getchallenge 0 \"%s\"", dummy));
+-
+-                    bool got = Steam_GetRawClientTicket(&pSteamClientTicket, &steamClientTicketSize);
+-                    iassert(got);
+-                    b64_encode(pSteamClientTicket, steamClientTicketSize, steamTicketBase64);
+-                    iassert(b64_decode(steamTicketBase64, strlen((char *)steamTicketBase64), steamTicketDecodeBuf) == steamClientTicketSize);
+-
+-                    NET_OutOfBandPrint(Com_LocalClient_GetNetworkID(localClientNum), clc->serverAddress, va("getchallenge 0 \"%s\" \"%llu\"", steamTicketBase64, Steam_GetClientSteamID64()));
+-
+-                    *(&clc->nonce + 1) = 0;
+-                    clc->nonce = 0;
+-                }
+-            }
+-            else if ( connstate == CA_CHALLENGING )
++            if ( connstate == CA_CHALLENGING )
+             {
+                 I_strncpyz(info, Dvar_InfoString(localClientNum, 2), 1024);
+                 Info_SetValueForKey(info, "protocol", va("%i", 1044));
+                 Info_SetValueForKey(info, "challenge", va("%i", clc->challenge));
+-                Uid = LiveSteam_GetUid();
+-                Int64ToString(Uid, clientSteamIDStr);
+-                Info_SetValueForKey(info, "steamid", clientSteamIDStr);
+                 if ( !clc->qport
+                     && !Assert_MyHandler(
+                                 "C:\\projects_pc\\cod\\codsrc\\src\\client_mp\\cl_main_mp.cpp",
+--- a/src/client_mp/sv_client_mp.cpp
++++ b/src/client_mp/sv_client_mp.cpp
+@@ -107,110 +107,9 @@
+     }
+ }
+ 
+-void __cdecl SV_GetChallenge(netadr_t from)
+-{
+-    int v1; // esi
+-    int time; // [esp+4h] [ebp-18h]
+-    challenge_t *challenge; // [esp+8h] [ebp-14h]
+-    int oldest; // [esp+Ch] [ebp-10h]
+-    int i; // [esp+10h] [ebp-Ch]
+-    int oldestTime; // [esp+14h] [ebp-8h]
+-
+-    if ( sv_authenticating->current.enabled )
+-    {
+-        Com_Printf(0, "Dedicated server: Rejecting incoming connection, we're re-authing\n");
+-        return;
+-    }
+-    else if ( sv_dwlsgerror->current.enabled )
+-    {
+-        Com_PrintWarning(0, "Dedicated server: Session update failure, rejecting incoming connection\n");
+-        return;
+-    }
+-
+-    oldest = 0;
+-    oldestTime = 0x7FFFFFFF;
+-    challenge = svs.challenges;
+-    for ( i = 0; i < 1024 && (challenge->connected || !NET_CompareAdr(from, challenge->adr)); ++i )
+-    {
+-        if ( challenge->time < oldestTime )
+-        {
+-            oldestTime = challenge->time;
+-            oldest = i;
+-        }
+-        ++challenge;
+-    }
+-    if ( i == 1024 )
+-    {
+-        challenge = &svs.challenges[oldest];
+-        v1 = rand() << 16;
+-        challenge->challenge = svs.time ^ rand() ^ v1;
+-        challenge->adr = from;
+-        challenge->firstTime = svs.time;
+-        challenge->firstPing = 0;
+-        if ( svs.time <= 0 )
+-            time = 1;
+-        else
+-            time = svs.time;
+-        challenge->time = time;
+-        challenge->connected = 0;
+-    }
+-
+-
+-    //challenge->pingTime = svs.time;
+-    //NET_OutOfBandPrint(NS_SERVER, from, va("challengeResponse %i", challenge->challenge));
+-    
+-    // LWSS ADD - all new below here
+-    char *clientSteamTicketBase64 = (char *)SV_Cmd_Argv(2);
+-    char *clientSteamID64 = (char *)SV_Cmd_Argv(3);
+-    unsigned char decodedSteamTicket[1024 + 128]{ 0 };
+-
+-    if (!clientSteamTicketBase64[0] || !clientSteamID64[0])
+-    {
+-        iassert(0); // guy didn't send enough information
+-        return;
+-    }
+-
+-    if (strlen(clientSteamTicketBase64) > sizeof(decodedSteamTicket))
+-    {
+-        iassert(0);
+-        return;
+-    }
+-
+-    uint32 decodedLen = b64_decode((unsigned char *)clientSteamTicketBase64, strlen(clientSteamTicketBase64), decodedSteamTicket);
+-
+-    char *endptr;
+-    uint64_t steamID64 = strtoull(clientSteamID64, &endptr, 10);
+-
+-    //if (SV_IsBannedGuid(guid)) 
+-    //{
+-    //    Com_Printf(15, "rejected connection from permanently banned GUID \"%s\"\n", clientSteamID64);
+-    //    NET_OutOfBandPrint(NS_SERVER, svs.challenges[i].adr, "error\xA\x15You are permanently banned from this server");
+-    //    memset(&svs.challenges[i], 0, sizeof(svs.challenges[i]));
+-    //    return;
+-    //}
+-    //if (SV_IsTempBannedGuid(guid)) 
+-    //{
+-    //    Com_Printf(15, "rejected connection from temporarily banned GUID \"%s\"\n", clientSteamID64);
+-    //    NET_OutOfBandPrint(NS_SERVER, svs.challenges[i].adr, "error\xA\x15You are temporarily banned from this server");
+-    //    memset(&svs.challenges[i], 0, sizeof(svs.challenges[i]));
+-    //    return;
+-    //}
+-
+-    challenge->steamID64 = steamID64;
+-
+-    if (Steam_CheckClientTicket(decodedSteamTicket, decodedLen, steamID64))
+-    {
+-        challenge->pingTime = svs.time;
+-        NET_OutOfBandPrint(NS_SERVER, from, va("challengeResponse %i", challenge->challenge));
+-        return;
+-    }
+-    else
+-    {
+-        Com_Printf(15, "rejected connection from invalid Steam GUID \"%s\"\n", clientSteamID64);
+-        NET_OutOfBandPrint(NS_SERVER, challenge->adr, "error\xA\x15Your Steam Client Ticket was Invalid");
+-        memset(challenge, 0, sizeof(challenge_t));
+-        return;
+-    }
++void __cdecl SV_GetChallenge(netadr_t)
++{
++    // Remote challenges are unavailable in local multiplayer.
+ }
+ 
+ void __cdecl SV_CacheClientStatChange(unsigned int clientNum, ddlState_t *searchState)
+@@ -754,6 +653,9 @@
+ 
+ void __cdecl SV_DirectConnect(netadr_t from)
+ {
++    if (!NET_IsLocalAddress(from))
++        return;
++
+     const char *BuildName; // eax
+ 
+     unsigned int v19; // eax
+@@ -1104,7 +1006,6 @@
+             I_strncpyz(newcl->clientPBguid, clientPBguid, 33);
+ 
+             // LWSS ADD - for steam auth
+-            iassert(steamID64 || newcl->bIsDemoClient || !IsDedicatedServer());
+             newcl->steamID = steamID64;
+             // LWSS END
+ 

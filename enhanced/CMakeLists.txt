@@ -6,6 +6,9 @@ set(upstream_dir "${PROJECT_SOURCE_DIR}/upstream/kisakblack")
 set(overlay_dir "${CMAKE_CURRENT_BINARY_DIR}/kisakblack")
 set(overlay_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/kisakblack.patch")
 set(overlay_units
+    src/client_mp/cl_main_mp.cpp
+    src/client_mp/sv_client_mp.cpp
+    src/win32/win_main.cpp
     src/cgame/cg_camera.cpp
     src/cgame_mp/cg_main_mp.cpp
     src/gfx_d3d/r_init.cpp
@@ -42,18 +45,42 @@ if(NOT patch_result EQUAL 0)
     message(FATAL_ERROR "Cannot apply the KisakBlack enhancement patch:\n${patch_error}")
 endif()
 
+set(replaced_units
+    src/live/live_steam.cpp
+    src/live/live_steam_achievements.cpp
+    src/live/live_steam_client.cpp
+    src/live/live_steam_server.cpp
+    src/live/live_steamp2p.cpp
+    src/live/live_friends_pc.cpp
+    src/win32/win_steam.cpp
+    src/gfx_d3d/r_cinematic.cpp
+    src/binklib/binktextures.cpp
+)
+foreach(unit IN LISTS replaced_units)
+    if(NOT "${upstream_dir}/${unit}" IN_LIST engine_sources)
+        message(FATAL_ERROR "Review enhanced backend replacement for ${unit}")
+    endif()
+    list(REMOVE_ITEM engine_sources "${upstream_dir}/${unit}")
+endforeach()
 set_property(TARGET KisakBlack PROPERTY SOURCES "${engine_sources}")
 get_target_property(engine_libraries KisakBlack LINK_LIBRARIES)
-if(NOT "xinput.lib" IN_LIST engine_libraries)
-    message(FATAL_ERROR "Review the upstream XInput linkage before building the enhanced edition")
-endif()
-list(REMOVE_ITEM engine_libraries "xinput.lib")
-set_property(TARGET KisakBlack PROPERTY LINK_LIBRARIES "${engine_libraries}")
 get_target_property(engine_interface KisakBlack INTERFACE_LINK_LIBRARIES)
-list(REMOVE_ITEM engine_interface "xinput.lib")
+foreach(library IN ITEMS xinput.lib steam_api.lib binkw32.lib)
+    if(NOT "${library}" IN_LIST engine_libraries)
+        message(FATAL_ERROR "Review enhanced linkage for ${library}")
+    endif()
+    list(REMOVE_ITEM engine_libraries "${library}")
+    list(REMOVE_ITEM engine_interface "${library}")
+endforeach()
+set_property(TARGET KisakBlack PROPERTY LINK_LIBRARIES "${engine_libraries}")
 set_property(TARGET KisakBlack PROPERTY INTERFACE_LINK_LIBRARIES "${engine_interface}")
 target_include_directories(KisakBlack PRIVATE "${PROJECT_SOURCE_DIR}")
-target_sources(KisakBlack PRIVATE cgame/fov.cpp win32/win_rawinput.cpp)
+target_sources(KisakBlack PRIVATE
+    cgame/fov.cpp
+    gfx_d3d/cinematic_unavailable.cpp
+    live/local_platform.cpp
+    win32/win_rawinput.cpp
+)
 
 add_executable(bo1_fov_test "${PROJECT_SOURCE_DIR}/tests/enhanced/fov_test.cpp")
 target_compile_features(bo1_fov_test PRIVATE cxx_std_17)
