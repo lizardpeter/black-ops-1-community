@@ -1,0 +1,24 @@
+name: Windows x64 port tests
+
+on:
+  push:
+    paths:
+      - 'enhanced/port/x64/**'
+      - '.github/workflows/x64-port.yml'
+  pull_request:
+    paths:
+      - 'enhanced/port/x64/**'
+      - '.github/workflows/x64-port.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fastfile:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - run: cmake -S enhanced/port/x64 -B build/x64-port -G "Visual Studio 17 2022" -A x64
+      - run: cmake --build build/x64-port --config Release
+      - run: ctest --test-dir build/x64-port -C Release --output-on-failure

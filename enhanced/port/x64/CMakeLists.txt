@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.21)
+project(BO1FastfileX64 LANGUAGES CXX)
+enable_testing()
+add_executable(bo1_fastfile_x64_test fastfile_reference_test.cpp)
+target_compile_features(bo1_fastfile_x64_test PRIVATE cxx_std_17)
+add_test(NAME bo1_fastfile_x64 COMMAND bo1_fastfile_x64_test)
