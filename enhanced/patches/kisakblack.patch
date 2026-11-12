@@ -514,3 +514,19 @@
              newcl->steamID = steamID64;
              // LWSS END
  
+--- a/src/database/db_load.cpp
++++ b/src/database/db_load.cpp
+@@ -1,4 +1,5 @@
+ #include "db_load.h"
++#include <enhanced/gfx_d3d/material_capture.h>
+ #include "db_stream_load.h"
+ #include "db_stream.h"
+ #include <xanim/dobj.h>
+@@ -2318,6 +2319,7 @@
+     Load_MaterialPassArray(1, varMaterialTechnique->passCount);
+     varXString = &varMaterialTechnique->name;
+     Load_XString(0);
++    BO1_CaptureMaterialShaders(*varMaterialTechnique);
+ }
+ 
+ void __cdecl Load_MaterialTextureDefInfo(bool atStreamStart)

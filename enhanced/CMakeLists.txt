@@ -6,6 +6,7 @@ set(upstream_dir "${PROJECT_SOURCE_DIR}/upstream/kisakblack")
 set(overlay_dir "${CMAKE_CURRENT_BINARY_DIR}/kisakblack")
 set(overlay_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/kisakblack.patch")
 set(overlay_units
+    src/database/db_load.cpp
     src/client_mp/cl_main_mp.cpp
     src/client_mp/sv_client_mp.cpp
     src/win32/win_main.cpp
@@ -78,6 +79,7 @@ target_include_directories(KisakBlack PRIVATE "${PROJECT_SOURCE_DIR}")
 target_sources(KisakBlack PRIVATE
     cgame/fov.cpp
     gfx_d3d/cinematic_unavailable.cpp
+    gfx_d3d/material_capture.cpp
     live/local_platform.cpp
     win32/win_rawinput.cpp
 )

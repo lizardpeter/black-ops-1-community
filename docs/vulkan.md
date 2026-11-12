@@ -35,3 +35,5 @@ cmake --build build/shader-translate --config Release --target bo1_shader_transl
 ```
 
 The tool links the shader stages and writes `menu.vert.spv` and `menu.frag.spv`. It currently assumes float vertex inputs. Porting a material also requires its vertex declaration, descriptor bindings, constants, textures, and render state. The synthetic Shader Model 3 test passed SPIR-V validation. Retail material coverage has yet to be measured.
+
+The enhanced D3D9 build can export shader pairs directly from fastfiles while loading material techniques. Set `$env:BO1_CAPTURE_SHADERS = '1'` before launching it with your local game assets. Each numbered entry in the working directory's `bo1-shader-capture` folder has a `.vs.bin`, a `.ps.bin`, and a text file naming the technique, pass, shaders, and stream routes. Pass the two binary files for the same entry to the translator. The capture hook is opt-in and hasn't been run against a retail install in this environment.
