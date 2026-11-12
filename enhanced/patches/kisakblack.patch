@@ -587,22 +587,24 @@
  void __cdecl Load_MaterialTextureDefInfo(bool atStreamStart)
 --- a/src/client_mp/cl_scrn_mp.cpp
 +++ b/src/client_mp/cl_scrn_mp.cpp
-@@ -1,4 +1,5 @@
+@@ -1,4 +1,6 @@
  #include "cl_scrn_mp.h"
 +#include <cstdlib>
++#include <atomic>
  #include <gfx_d3d/r_font.h>
  #include <gfx_d3d/r_rendercmds.h>
  #include "cl_main_mp.h"
-@@ -557,6 +558,13 @@
+@@ -557,6 +559,14 @@
          0,
          v6))
      {
 +        static const bool launchCheck = std::getenv("BO1_LAUNCH_CHECK") != nullptr;
-+        static bool firstActiveFrame = true;
-+        if (launchCheck && firstActiveFrame)
++        extern std::atomic<bool> bo1CapturePending;
++        static unsigned int activeFrames = 0;
++        if (launchCheck && activeFrames < 120 && ++activeFrames == 120)
 +        {
 +            Com_Printf(14, "BO1_LAUNCH_CHECK: active multiplayer frame\n");
-+            firstActiveFrame = false;
++            bo1CapturePending.store(true);
 +        }
          //BG_EvalVehicleName();
          if ((CL_GetLocalClientUIGlobals(localClientNum)->keyCatchers & 0x10) != 0)
@@ -639,3 +641,62 @@
          v6 = R_ErrorDescription(hr);
          Com_Error(
              ERR_FATAL,
+--- a/src/gfx_d3d/rb_backend.cpp
++++ b/src/gfx_d3d/rb_backend.cpp
+@@ -1,4 +1,8 @@
+ #include "rb_backend.h"
++#include <atomic>
++#include <cstdlib>
++#include <d3dx9.h>
++#include <qcommon/common.h>
+ #include "rb_stats.h"
+ #include "r_image.h"
+ #include "rb_shade.h"
+@@ -4689,6 +4693,27 @@
+     }
+ }
+
++std::atomic<bool> bo1CapturePending{false};
++
++static bool BO1_CaptureBackBuffer(IDirect3DSwapChain9 *swapChain)
++{
++    const char *path = std::getenv("BO1_CAPTURE_PATH");
++    if (!path || !*path)
++        return false;
++
++    IDirect3DSurface9 *backBuffer = nullptr;
++    HRESULT result = swapChain->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &backBuffer);
++    if (SUCCEEDED(result))
++    {
++        result = D3DXSaveSurfaceToFileA(path, D3DXIFF_PNG, backBuffer, nullptr, nullptr);
++        backBuffer->Release();
++    }
++    if (FAILED(result))
++        Com_Printf(14, "BO1_LAUNCH_CHECK: back buffer capture failed (0x%08X)\n",
++            static_cast<unsigned int>(result));
++    return SUCCEEDED(result);
++}
++
+ void RB_SwapBuffers()
+ {
+     unsigned __int8 stereoActivated; // [esp+2Fh] [ebp-2Dh] BYREF
+@@ -4708,7 +4733,18 @@
+         if (rg.renderHiResShot || dx.resizeWindow)
+             hr = 0;
+         else
+-            hr = dx.windows[dx.targetWindowIndex].swapChain->Present(0, 0, 0, 0, 0);
++        {
++            auto *swapChain = dx.windows[dx.targetWindowIndex].swapChain;
++            bool captured = false;
++            if (bo1CapturePending.load())
++            {
++                bo1CapturePending.store(false);
++                captured = BO1_CaptureBackBuffer(swapChain);
++            }
++            hr = swapChain->Present(0, 0, 0, 0, 0);
++            if (captured && SUCCEEDED(hr))
++                Com_Printf(14, "BO1_LAUNCH_CHECK: captured and presented multiplayer frame\n");
++        }
+     }
+
+     FrameMark; // backend thread Frame marker

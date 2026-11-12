@@ -8,6 +8,7 @@ on:
       - '.github/workflows/windows-game-smoke.yml'
       - 'scripts/stage_bo1_r2.py'
       - 'scripts/smoke_bo1.ps1'
+      - 'enhanced/CMakeLists.txt'
       - 'enhanced/patches/kisakblack.patch'
 
 permissions:
@@ -81,14 +82,23 @@ jobs:
             exit 1
           }
 
-      - name: Boot the game and verify a local multiplayer frame
+      - name: Boot the game and capture a local multiplayer frame
         shell: pwsh
         run: |
           try {
             ./scripts/smoke_bo1.ps1 -GameDirectory "$env:RUNNER_TEMP/bo1-game" `
-              -Executable build/enhanced/Release/BlackOpsMP-Community.exe
+              -Executable build/enhanced/Release/BlackOpsMP-Community.exe `
+              -Screenshot "$env:RUNNER_TEMP/bo1-nuketown.png"
           } catch {
             $message = $_.Exception.Message -replace '[\r\n]+', ' '
             Write-Host "::error title=BO1 launch failed::$message"
             throw
           }
+
+      - name: Save the Nuketown screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bo1-nuketown-screenshot
+          path: ${{ runner.temp }}/bo1-nuketown.png
+          if-no-files-found: ignore
