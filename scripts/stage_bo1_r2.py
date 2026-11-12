@@ -58,23 +58,36 @@ def main():
 
     args.destination.mkdir(parents=True, exist_ok=True)
     with ExitStack() as cleanup:
+        available = shutil.disk_usage(args.destination).free
         archive = None
-        for base in R2_BASES:
-            try:
-                source = cleanup.enter_context(RetryingRangeObject(base + quote(BO1_ZIP_KEY, safe="/"), EXPECTED_SIZE))
-                archive = cleanup.enter_context(zipfile.ZipFile(source))
-                break
-            except (OSError, RuntimeError, zipfile.BadZipFile) as error:
-                print(f"R2 range read failed for {base}: {error}", flush=True)
-        if archive is None:
-            if shutil.disk_usage(args.destination).free < EXPECTED_SIZE + 8 * 1024**3:
-                raise RuntimeError("Insufficient temporary disk for full R2 archive fallback")
+        if available >= EXPECTED_SIZE + 8 * 1024**3:
             zip_path = args.destination.parent / "bo1-retail.zip"
             cleanup.callback(zip_path.unlink, missing_ok=True)
-            size, _, _ = download(R2_BASES[0] + BO1_ZIP_KEY, zip_path, EXPECTED_SIZE)
-            if size != EXPECTED_SIZE:
-                raise RuntimeError("R2 archive size mismatch")
-            archive = cleanup.enter_context(zipfile.ZipFile(zip_path))
+            print(f"Downloading the {EXPECTED_SIZE:,}-byte R2 archive in one stream.", flush=True)
+            try:
+                size, _, _ = download(R2_BASES[0] + BO1_ZIP_KEY, zip_path, EXPECTED_SIZE)
+                if size != EXPECTED_SIZE:
+                    raise RuntimeError(f"R2 archive size mismatch: received {size:,} bytes")
+                archive = cleanup.enter_context(zipfile.ZipFile(zip_path))
+                print("R2 transfer complete. Reading the local ZIP directory.", flush=True)
+            except (OSError, RuntimeError, zipfile.BadZipFile) as error:
+                print(f"Bulk R2 transfer failed: {error}", flush=True)
+                zip_path.unlink(missing_ok=True)
+
+        if archive is None:
+            print("Using bounded R2 byte ranges.", flush=True)
+            failures = []
+            for base in R2_BASES:
+                try:
+                    source = cleanup.enter_context(
+                        RetryingRangeObject(base + quote(BO1_ZIP_KEY, safe="/"), EXPECTED_SIZE)
+                    )
+                    archive = cleanup.enter_context(zipfile.ZipFile(source))
+                    break
+                except (OSError, RuntimeError, zipfile.BadZipFile) as error:
+                    failures.append(f"{base}: {error}")
+            if archive is None:
+                raise RuntimeError("Cannot open the BO1 archive: " + "; ".join(failures))
 
         selected = {}
         for entry in archive.infolist():
@@ -92,11 +105,16 @@ def main():
         if total + 512 * 1024**2 > shutil.disk_usage(args.destination).free:
             raise RuntimeError(f"Insufficient disk for {total} bytes of game assets")
 
+        print(f"Extracting {len(selected)} ZIP members ({total:,} bytes).", flush=True)
+        written = 0
         for path, entry in sorted(selected.values(), key=lambda item: item[1].header_offset):
             output = args.destination / path
             output.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(entry) as source, output.open("wb") as destination:
                 shutil.copyfileobj(source, destination, 1024**2)
+            written += entry.file_size
+            if entry.file_size >= 64 * 1024**2:
+                print(f"Staged {written:,}/{total:,} bytes ({path.as_posix()}).", flush=True)
         print(f"Staged {len(selected)} files ({total} bytes), including Nuketown.", flush=True)
 
 
