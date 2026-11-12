@@ -2,6 +2,7 @@
 set(upstream_cmake "${kisakblack_source}/CMakeLists.txt")
 set(engine_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/physics.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/runtime-physics.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/fastfile.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/raw-file.patch"
 )

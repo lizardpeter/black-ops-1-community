@@ -1,0 +1,485 @@
+--- a/src/physics/phys_transient_allocator.cpp
++++ b/src/physics/phys_transient_allocator.cpp
+@@ -1,5 +1,8 @@
+ #include "phys_transient_allocator.h"
+ #include "phys_mem_new.h"
++#include <Windows.h>
++#include <cstdint>
++#include <new>
+ 
+ void phys_transient_allocator::reset()
+ {
+@@ -42,172 +45,92 @@
+         }
+         while ( m_next_block != as->m_first_block );
+     }
+-    *(phys_transient_allocator::allocator_state *)&this->m_first_block = *as;
++    m_first_block = as->m_first_block;
++    m_cur = as->m_cur;
++    m_end = as->m_end;
++    m_total_memory_allocated = as->m_total_memory_allocated;
+ }
+ 
+ void __thiscall phys_transient_allocator::resize()
+ {
+-    phys_slot_pool *m_slot_pool; // eax
+-    char *v3; // eax
++    constexpr unsigned int blockSize = 0x4000;
++    constexpr unsigned int blockAlignment = alignof(block_header);
++    if (!m_slot_pool)
++        m_slot_pool = GET_PHYS_SLOT_POOL(blockSize, blockAlignment);
++    if (!m_slot_pool)
++        return;
+ 
+-    m_slot_pool = (phys_slot_pool *)this->m_slot_pool;
+-    if ( !m_slot_pool )
+-    {
+-        m_slot_pool = GET_PHYS_SLOT_POOL(0x4000u, 4u);
+-        this->m_slot_pool = m_slot_pool;
+-    }
+-    v3 = PSP_ALLOC(m_slot_pool);
+-    if ( v3 )
+-    {
+-        *(unsigned int *)v3 = 0x4000;
+-        *((unsigned int *)v3 + 1) = 4;
+-        *((unsigned int *)v3 + 2) = (unsigned int)this->m_first_block;
+-        this->m_first_block = (phys_transient_allocator::block_header *)v3;
+-        this->m_total_memory_allocated += 0x4000;
+-        this->m_cur = v3 + 12;
+-        this->m_end = v3 + 0x4000;
+-    }
++    auto *bytes = PSP_ALLOC(static_cast<phys_slot_pool *>(m_slot_pool));
++    if (!bytes)
++        return;
++
++    m_first_block = new (bytes) block_header{blockSize, blockAlignment, m_first_block};
++    m_total_memory_allocated += blockSize;
++    m_cur = bytes + sizeof(block_header);
++    m_end = bytes + blockSize;
+ }
+ 
+-int phys_transient_allocator::mt_allocate_internal(int size, int alignment)
++void *phys_transient_allocator::mt_allocate_internal(int size, int alignment)
+ {
+-    char *cur; // [esp+Ch] [ebp-4h]
++    if (size < 0 || alignment <= 0 || (alignment & (alignment - 1)) != 0)
++        return nullptr;
+ 
+-    do
++    auto *cursor = reinterpret_cast<void *volatile *>(&m_cur);
++    auto *current = InterlockedCompareExchangePointer(cursor, nullptr, nullptr);
++    const auto end = reinterpret_cast<std::uintptr_t>(m_end);
++    const auto mask = static_cast<std::uintptr_t>(alignment - 1);
++    while (current)
+     {
+-        cur = this->m_cur;
+-        if ((char *)(size + (~(alignment - 1) & (unsigned int)&cur[alignment - 1])) > this->m_end)
+-            return 0;
+-    } while ((char *)_InterlockedCompareExchange(
+-        (volatile unsigned __int32 *)&this->m_cur,
+-        size + (~(alignment - 1) & (unsigned int)&cur[alignment - 1]),
+-        (signed __int32)cur) != cur);
+-    return ~(alignment - 1) & (unsigned int)&cur[alignment - 1];
++        const auto address = reinterpret_cast<std::uintptr_t>(current);
++        const auto padding = (0 - address) & mask;
++        if (address > end || padding > end - address ||
++            static_cast<std::uintptr_t>(size) > end - address - padding)
++            break;
++        auto *aligned = reinterpret_cast<char *>(address + padding);
++        auto *observed = InterlockedCompareExchangePointer(cursor, aligned + size, current);
++        if (observed == current)
++            return aligned;
++        current = observed;
++    }
++    return nullptr;
+ }
+ 
+ void *__thiscall phys_transient_allocator::allocate(
+-    int size,
+-    int alignment,
+-    int no_error,
+-    const char *error_msg)
++    int size, int alignment, int no_error, const char *error_msg)
+ {
+-    int v7; // [esp+4h] [ebp-14h]
+-    int v8; // [esp+Ch] [ebp-Ch]
+-    void *ptr; // [esp+14h] [ebp-4h]
+-
+     transient_allocator_update_largest_size();
+-    v8 = ~(alignment - 1) & (int)&this->m_cur[alignment - 1];
+-    if ((char *)(size + v8) <= this->m_end)
++    auto *result = mt_allocate_internal(size, alignment);
++    if (!result)
+     {
+-        this->m_cur = (char *)(size + v8);
+-        ptr = (void *)v8;
++        resize();
++        result = mt_allocate_internal(size, alignment);
+     }
+-    else
+-    {
+-        ptr = 0;
+-    }
+-    if (!ptr)
+-    {
+-        //phys_transient_allocator::resize();
+-        this->resize();
+-        v7 = ~(alignment - 1) & (int)&this->m_cur[alignment - 1];
+-        if ((char *)(size + v7) <= this->m_end)
+-        {
+-            this->m_cur = (char *)(size + v7);
+-            ptr = (void *)v7;
+-        }
+-        else
+-        {
+-            ptr = 0;
+-        }
+-        if (!ptr
+-            && _tlAssert(
+-                "C:\\projects_pc\\cod\\codsrc\\tl\\physics\\include\\phys_transient_allocator.h",
+-                79,
+-                "ptr",
+-                "transient allocation too large, increase block_size."))
+-        {
+-            __debugbreak();
+-        }
+-    }
+-    if (!ptr
+-        && !no_error
+-        && _tlAssert(
+-            "C:\\projects_pc\\cod\\codsrc\\tl\\physics\\include\\phys_transient_allocator.h",
+-            81,
+-            "ptr || no_error",
+-            error_msg))
+-    {
++    if (!result && !no_error &&
++        _tlAssert(__FILE__, __LINE__, "result || no_error", error_msg))
+         __debugbreak();
+-    }
+-    return ptr;
++    return result;
+ }
+ 
+ void *__thiscall phys_transient_allocator::mt_allocate(
+-    int size,
+-    int alignment,
+-    int no_error,
+-    const char *error_msg)
++    int size, int alignment, int no_error, const char *error_msg)
+ {
+-    int v7; // [esp+Ch] [ebp-40h]
+-    int v8; // [esp+14h] [ebp-38h]
+-    void *ptr; // [esp+48h] [ebp-4h]
+-
+     transient_allocator_update_largest_size();
+-    //minspec_read_write_mutex::ReadLock(&this->m_mutex);
+-    this->m_mutex.ReadLock();
+-    ptr = (void *)phys_transient_allocator::mt_allocate_internal(size, alignment);
+-    //minspec_read_write_mutex::ReadUnlock(&this->m_mutex);
+-    this->m_mutex.ReadUnlock();
+-    if (!ptr)
++    m_mutex.ReadLock();
++    auto *result = mt_allocate_internal(size, alignment);
++    m_mutex.ReadUnlock();
++    if (!result)
+     {
+-        //minspec_read_write_mutex::WriteLock(&this->m_mutex);
+-        this->m_mutex.WriteLock();
+-        v8 = ~(alignment - 1) & (int)&this->m_cur[alignment - 1];
+-        if ((char *)(size + v8) <= this->m_end)
++        m_mutex.WriteLock();
++        result = mt_allocate_internal(size, alignment);
++        if (!result)
+         {
+-            this->m_cur = (char *)(size + v8);
+-            ptr = (void *)v8;
++            resize();
++            result = mt_allocate_internal(size, alignment);
+         }
+-        else
+-        {
+-            ptr = 0;
+-        }
+-        if (!ptr)
+-        {
+-            phys_transient_allocator::resize();
+-            v7 = ~(alignment - 1) & (int)&this->m_cur[alignment - 1];
+-            if ((char *)(size + v7) <= this->m_end)
+-            {
+-                this->m_cur = (char *)(size + v7);
+-                ptr = (void *)v7;
+-            }
+-            else
+-            {
+-                ptr = 0;
+-            }
+-            if (!ptr
+-                && _tlAssert(
+-                    "c:\\projects_pc\\cod\\codsrc\\tl\\physics\\include\\phys_transient_allocator.h",
+-                    99,
+-                    "ptr",
+-                    "transient allocation too large, increase block_size."))
+-            {
+-                __debugbreak();
+-            }
+-        }
+-        //minspec_read_write_mutex::WriteUnlock(&this->m_mutex);
+-        this->m_mutex.WriteUnlock();
++        m_mutex.WriteUnlock();
+     }
+-    if (!ptr
+-        && !no_error
+-        && _tlAssert(
+-            "c:\\projects_pc\\cod\\codsrc\\tl\\physics\\include\\phys_transient_allocator.h",
+-            103,
+-            "ptr || no_error",
+-            error_msg))
+-    {
++    if (!result && !no_error &&
++        _tlAssert(__FILE__, __LINE__, "result || no_error", error_msg))
+         __debugbreak();
+-    }
+-    return ptr;
+-}
+\ No newline at end of file
++    return result;
++}
+--- a/src/physics/phys_transient_allocator.h
++++ b/src/physics/phys_transient_allocator.h
+@@ -63,7 +63,7 @@
+         int alignment,
+         int no_error,
+         const char *error_msg);
+-    int mt_allocate_internal(int size, int alignment);
++    void *mt_allocate_internal(int size, int alignment);
+ 
+     void reset();
+     void reset_to_state(const phys_transient_allocator::allocator_state *as);
+--- a/src/physics/rigid_body.h
++++ b/src/physics/rigid_body.h
+@@ -542,7 +542,6 @@
+     float m_hit_time;
+     struct phys_gjk_cache_info *m_gjk_ci;
+ };
+-static_assert(sizeof(phys_collision_pair) == 20);
+ 
+ class __declspec(align(16)) contact_point_info // sizeof=0x50
+ {
+@@ -636,7 +635,6 @@
+     void setup_constraint(struct pulse_sum_constraint_solver *phys, float delta_t);
+     void verify_constraint(environment_rigid_body *b1_, environment_rigid_body *b2_);
+ };
+-static_assert(sizeof(rigid_body_constraint_contact) == 0x2C);
+ 
+ struct environment_rigid_body : rigid_body // sizeof=0x160
+ {                                       // XREF: physics_system/r
+--- a/src/physics/phys_gjk_collision_detection.h
++++ b/src/physics/phys_gjk_collision_detection.h
+@@ -43,7 +43,6 @@
+     }
+     void auto_activate(struct broad_phase_info *bpi_impactor);
+ };
+-static_assert(sizeof(destructible_ent_aa) == 12);
+ 
+ struct dynamic_ent_aa : phys_auto_activate_callback // sizeof=0xC
+ {
+--- a/src/physics/phys_gjk.h
++++ b/src/physics/phys_gjk.h
+@@ -237,7 +237,6 @@
+         phys_inplace_avl_tree_node<phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal> m_avl_tree_node;
+         phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal *m_next_gjk_ci;
+     };
+-    static_assert(sizeof(phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal) == 0x90);
+ 
+     phys_simple_allocator<phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal> m_list_phys_gjk_cache_info_internal;
+     phys_inplace_avl_tree<phys_gjk_geom_id_pair_key, phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal, phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal::avl_tree_accessor> m_search_tree;
+@@ -863,7 +862,6 @@
+     // padding byte
+     // padding byte
+ };
+-static_assert(sizeof(gjk_trace_output_t) == 80);
+ 
+ struct __declspec(align(4)) gjk_slide_move_input_t // sizeof=0x2C
+ {                                       // XREF: ai_gjk_slide_move_input_t/r
+--- a/src/vehicle/nitrous_vehicle.h
++++ b/src/vehicle/nitrous_vehicle.h
+@@ -482,7 +482,6 @@
+     // padding byte
+     // padding byte
+ };
+-static_assert(sizeof(NitrousVehicle) == 0x440);
+ 
+ struct PhysObjUserData *__cdecl Phys_ObjCreateNitrousVehicle(
+                 const float *position,
+--- a/src/physics/phys_broad_phase.cpp
++++ b/src/physics/phys_broad_phase.cpp
+@@ -3064,7 +3064,7 @@
+ 
+     iassert(hit_time >= 0.0f && hit_time <= 1.0f);
+ 
+-    pair = (phys_collision_pair *)G_BPM->g_collision_memory_buffer.allocate(sizeof(phys_collision_pair), 4, 0, "phys_transient_allocator out of memory.");
++    pair = (phys_collision_pair *)G_BPM->g_collision_memory_buffer.allocate(sizeof(phys_collision_pair), alignof(phys_collision_pair), 0, "phys_transient_allocator out of memory.");
+ 
+     pair->m_hit_time = hit_time;
+     pair->m_bpi1 = bpi1;
+@@ -3084,7 +3084,7 @@
+ 
+     iassert(hit_time >= 0.0f && hit_time <= 1.0f);
+ 
+-    pair = (phys_collision_pair *)G_BPM->g_collision_memory_buffer.mt_allocate(sizeof(phys_collision_pair), 4, 0, "broad phase collision out of memory.");
++    pair = (phys_collision_pair *)G_BPM->g_collision_memory_buffer.mt_allocate(sizeof(phys_collision_pair), alignof(phys_collision_pair), 0, "broad phase collision out of memory.");
+ 
+     iassert(pair); // LWSS ADD
+ 
+@@ -3135,7 +3135,7 @@
+     }
+     if ( this->m_active_pair_allocator.m_count < this->m_max_num_active_pairs )
+     {
+-        v4 = (axis_aligned_sweep_and_prune::active_pair *)PMM_ALLOC(0x10u, 4u);
++        v4 = (active_pair *)PMM_ALLOC(sizeof(active_pair), alignof(active_pair));
+         if ( v4 )
+         {
+             ++this->m_active_pair_allocator.m_count;
+@@ -3213,36 +3213,27 @@
+     bpb->m_sap_node = v4;
+ }
+ 
+-void __thiscall axis_aligned_sweep_and_prune::remove(
+-                axis_aligned_sweep_and_prune::active_pair **list_ap,
+-                axis_aligned_sweep_and_prune::sap_node *node)
+-{
+-    int i; // esi
+-    char *v4; // edi
+-    phys_heap_gjk_cache_system_avl_tree *p_g_phys_gjk_cache_system; // ebx
+-
+-    for ( i = (int)*list_ap; *list_ap; i = (int)*list_ap )
+-    {
+-        if ( *(axis_aligned_sweep_and_prune::sap_node **)i == node
+-            || *(axis_aligned_sweep_and_prune::sap_node **)(i + 4) == node )
+-        {
+-            *list_ap = *(axis_aligned_sweep_and_prune::active_pair **)(i + 8);
+-            v4 = *(char **)(i + 12);
+-            p_g_phys_gjk_cache_system = &G_BPM->g_phys_gjk_cache_system;
+-            if ( v4 )
+-            {
+-                PMM_VALIDATE(v4, 0x90u, 0x10u);
+-                --p_g_phys_gjk_cache_system->m_list_phys_gjk_cache_info_internal.m_count;
+-                PMM_FREE((unsigned __int8 *)v4, 0x90u, 0x10u);
+-            }
+-            PMM_VALIDATE((char *)i, 0x10u, 4u);
+-            --this->m_active_pair_allocator.m_count;
+-            PMM_FREE((unsigned __int8 *)i, 0x10u, 4u);
+-        }
+-        else
+-        {
+-            list_ap = (axis_aligned_sweep_and_prune::active_pair **)(i + 8);
+-        }
++void __thiscall axis_aligned_sweep_and_prune::remove(active_pair **list, sap_node *node)
++{
++    while (auto *pair = *list)
++    {
++        if (pair->m_p1 != node && pair->m_p2 != node)
++        {
++            list = &pair->m_next;
++            continue;
++        }
++        *list = pair->m_next;
++        if (auto *cache = pair->m_gjk_ci)
++        {
++            using CacheEntry = phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal;
++            auto &cacheList = G_BPM->g_phys_gjk_cache_system.m_list_phys_gjk_cache_info_internal;
++            PMM_VALIDATE(reinterpret_cast<char *>(cache), sizeof(CacheEntry), 16);
++            --cacheList.m_count;
++            PMM_FREE(reinterpret_cast<unsigned char *>(cache), sizeof(CacheEntry), 16);
++        }
++        PMM_VALIDATE(reinterpret_cast<char *>(pair), sizeof(*pair), alignof(active_pair));
++        --m_active_pair_allocator.m_count;
++        PMM_FREE(reinterpret_cast<unsigned char *>(pair), sizeof(*pair), alignof(active_pair));
+     }
+ }
+ 
+@@ -3409,7 +3400,7 @@
+     //    __debugbreak();
+     //}
+     iassert(m_search_tree.find(key) == NULL);
+-    v13 = (phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal *)PMM_ALLOC(0x90u, 0x10u);
++    v13 = (phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal *)PMM_ALLOC(sizeof(phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal), 16);
+     v11 = v13;
+     if ( v13 )
+     {
+@@ -3528,13 +3519,13 @@
+                 p_g_phys_gjk_cache_system = &G_BPM->g_phys_gjk_cache_system;
+                 if (m_gjk_ci)
+                 {
+-                    PMM_VALIDATE(m_gjk_ci, 0x90u, 0x10u);
++                    PMM_VALIDATE(m_gjk_ci, sizeof(phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal), 16);
+                     --p_g_phys_gjk_cache_system->m_list_phys_gjk_cache_info_internal.m_count;
+-                    PMM_FREE((unsigned __int8 *)m_gjk_ci, 0x90u, 0x10u);
++                    PMM_FREE((unsigned __int8 *)m_gjk_ci, sizeof(phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal), 16);
+                 }
+-                PMM_VALIDATE((char *)m_list_bpi_bpi, 0x10u, 4u);
++                PMM_VALIDATE((char *)m_list_bpi_bpi, sizeof(*m_list_bpi_bpi), alignof(active_pair));
+                 --v37->m_active_pair_allocator.m_count;
+-                PMM_FREE((unsigned __int8 *)m_list_bpi_bpi, 0x10u, 4u);
++                PMM_FREE((unsigned __int8 *)m_list_bpi_bpi, sizeof(*m_list_bpi_bpi), alignof(active_pair));
+             }
+             else
+             {
+@@ -3624,13 +3615,13 @@
+                 p_g_phys_gjk_cache_system = &G_BPM->g_phys_gjk_cache_system;
+                 if (v21)
+                 {
+-                    PMM_VALIDATE(v21, 0x90u, 0x10u);
++                    PMM_VALIDATE(v21, sizeof(phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal), 16);
+                     --p_g_phys_gjk_cache_system->m_list_phys_gjk_cache_info_internal.m_count;
+-                    PMM_FREE((unsigned __int8 *)v21, 0x90u, 0x10u);
++                    PMM_FREE((unsigned __int8 *)v21, sizeof(phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal), 16);
+                 }
+-                PMM_VALIDATE((char *)m_list_bpi_bpg, 0x10u, 4u);
++                PMM_VALIDATE((char *)m_list_bpi_bpg, sizeof(*m_list_bpi_bpg), alignof(active_pair));
+                 --v37->m_active_pair_allocator.m_count;
+-                PMM_FREE((unsigned __int8 *)m_list_bpi_bpg, 0x10u, 4u);
++                PMM_FREE((unsigned __int8 *)m_list_bpi_bpg, sizeof(*m_list_bpi_bpg), alignof(active_pair));
+             }
+             else
+             {
+@@ -3716,13 +3707,13 @@
+                 p_g_phys_gjk_cache_system = &G_BPM->g_phys_gjk_cache_system;
+                 if (v31)
+                 {
+-                    PMM_VALIDATE(v31, 0x90u, 0x10u);
++                    PMM_VALIDATE(v31, sizeof(phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal), 16);
+                     --p_g_phys_gjk_cache_system->m_list_phys_gjk_cache_info_internal.m_count;
+-                    PMM_FREE((unsigned __int8 *)v31, 0x90u, 0x10u);
++                    PMM_FREE((unsigned __int8 *)v31, sizeof(phys_heap_gjk_cache_system_avl_tree::phys_gjk_cache_info_internal), 16);
+                 }
+-                PMM_VALIDATE((char *)m_list_bpg_bpg, 0x10u, 4u);
++                PMM_VALIDATE((char *)m_list_bpg_bpg, sizeof(*m_list_bpg_bpg), alignof(active_pair));
+                 --v37->m_active_pair_allocator.m_count;
+-                PMM_FREE((unsigned __int8 *)m_list_bpg_bpg, 0x10u, 4u);
++                PMM_FREE((unsigned __int8 *)m_list_bpg_bpg, sizeof(*m_list_bpg_bpg), alignof(active_pair));
+             }
+             else
+             {
+--- a/src/physics/phys_collision.cpp
++++ b/src/physics/phys_collision.cpp
+@@ -1195,7 +1195,7 @@
+     {
+         if (collision_visitor->cent->destructible && (collision_visitor->bpeqi->env_collision_flags & 8) != 0)
+         {
+-            v7 = (destructible_ent_aa *)collision_visitor->allocate(sizeof(destructible_ent_aa), 4, 0);
++            v7 = (destructible_ent_aa *)collision_visitor->allocate(sizeof(destructible_ent_aa), alignof(destructible_ent_aa), 0);
+             if (!v7)
+                 return 0;
+             //cent = (phys_auto_activate_callback_vtbl *)collision_visitor->cent;
+--- a/src/physics/phys_colgeom.cpp
++++ b/src/physics/phys_colgeom.cpp
+@@ -1153,7 +1153,7 @@
+ 
+     if ( allocator->is_query() )
+     {
+-        obj = (gjk_double_sphere_t *)allocator->allocate(sizeof(gjk_double_sphere_t), 0, 0);
++        obj = (gjk_double_sphere_t *)allocator->allocate(sizeof(gjk_double_sphere_t), alignof(gjk_double_sphere_t), 0);
+         new (obj) gjk_double_sphere_t();
+         obj->m_flags |= FLAG_TEMP_ALLOCATION;
+     }
