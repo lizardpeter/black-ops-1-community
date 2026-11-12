@@ -12,4 +12,14 @@ cmake --build build/vulkan-x64 --config Release
 
 The title and console report IMMEDIATE or the FIFO fallback. A single command buffer and frame fence cap application GPU submissions at one outstanding frame. A zero-timeout image acquire keeps the message loop responsive. Each swapchain image owns its present-wait semaphore, reused only after acquisition of that image. Resize and shutdown use the base swapchain idle convention. Explicit presentation fences are still needed for guaranteed retirement of present resources. GPU submission depth does not establish display queue depth or physical latency.
 
-The next render target is one real BO1 menu frame. That requires loading a BO1 texture, translating a representative D3D9 shader to SPIR-V, binding the texture and shader, and comparing output with the D3D9 build. The probe currently presents a clear color. The game still uses D3D9.
+The next render target is one real BO1 menu frame. That requires loading a BO1 texture, translating a representative D3D9 shader to SPIR-V, binding the texture and shader, and comparing output with the D3D9 build. The game still uses D3D9.
+
+## Preview a BO1 texture
+
+Pass a loose PC BO1 IWI v13 file extracted from your installation. The probe supports 2D BGRA, BGR, BC1, BC2, and BC3, and displays the largest mip while retaining the image's aspect ratio. Block-compressed formats require GPU BC support. The sample shader is built into the executable from GLSL with the Vulkan SDK's glslang compiler.
+
+```powershell
+.\build\vulkan-x64\Release\bo1_vulkan_probe.exe C:\path\to\image.iwi
+```
+
+With no image argument, the probe clears the swapchain. With an image, it uploads through a staging buffer and draws with a sampled-image descriptor and dynamic rendering. This exercises the image and shader pipeline. BO1's menu layout, actual material shaders, and retail asset parity remain to be integrated.

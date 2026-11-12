@@ -1,10 +1,14 @@
 #include <windows.h>
 #include <vulkan/vulkan.h>
 
+#include "image.h"
+
 #include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -79,6 +83,7 @@ struct Vulkan
     uint32_t family = 0;
     VkDevice device = VK_NULL_HANDLE;
     VkQueue queue = VK_NULL_HANDLE;
+    bool supportsBc = false;
     VkCommandPool pool = VK_NULL_HANDLE;
     VkCommandBuffer command = VK_NULL_HANDLE;
     VkFence frameDone = VK_NULL_HANDLE;
@@ -100,7 +105,7 @@ struct Vulkan
             vkDestroyInstance(instance, nullptr);
     }
 
-    void Initialize(const Window &window)
+    void Initialize(const Window &window, bool needsBc)
     {
         const std::array extensions{VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME};
         VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
@@ -116,7 +121,7 @@ struct Vulkan
         surfaceInfo.hinstance = window.module;
         surfaceInfo.hwnd = window.handle;
         Check(vkCreateWin32SurfaceKHR(instance, &surfaceInfo, nullptr, &surface), "Create Win32 surface");
-        PickDevice();
+        PickDevice(needsBc);
 
         constexpr float priority = 1.0f;
         VkDeviceQueueCreateInfo queueInfo{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -124,7 +129,13 @@ struct Vulkan
         queueInfo.queueCount = 1;
         queueInfo.pQueuePriorities = &priority;
         const char *swapchainExtension = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+        VkPhysicalDeviceVulkan13Features rendering{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+        rendering.dynamicRendering = VK_TRUE;
+        VkPhysicalDeviceFeatures features{};
+        features.textureCompressionBC = supportsBc;
         VkDeviceCreateInfo deviceInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+        deviceInfo.pNext = &rendering;
+        deviceInfo.pEnabledFeatures = &features;
         deviceInfo.queueCreateInfoCount = 1;
         deviceInfo.pQueueCreateInfos = &queueInfo;
         deviceInfo.enabledExtensionCount = 1;
@@ -149,7 +160,7 @@ struct Vulkan
         Check(vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageReady), "Create acquire semaphore");
     }
 
-    void PickDevice()
+    void PickDevice(bool needsBc)
     {
         for (auto candidate : Enumerate<VkPhysicalDevice>(
                  [&](auto count, auto values) { return vkEnumeratePhysicalDevices(instance, count, values); }))
@@ -157,6 +168,13 @@ struct Vulkan
             VkPhysicalDeviceProperties properties{};
             vkGetPhysicalDeviceProperties(candidate, &properties);
             if (properties.apiVersion < VK_API_VERSION_1_4)
+                continue;
+
+            VkPhysicalDeviceVulkan13Features rendering{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+            VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            features.pNext = &rendering;
+            vkGetPhysicalDeviceFeatures2(candidate, &features);
+            if (!rendering.dynamicRendering || (needsBc && !features.features.textureCompressionBC))
                 continue;
 
             const auto extensions = Enumerate<VkExtensionProperties>([&](auto count, auto values) {
@@ -180,13 +198,14 @@ struct Vulkan
                 if (present && families[index].queueCount && (families[index].queueFlags & VK_QUEUE_GRAPHICS_BIT))
                 {
                     physical = candidate;
+                    supportsBc = features.features.textureCompressionBC;
                     family = index;
                     std::printf("Vulkan device: %s\n", properties.deviceName);
                     return;
                 }
             }
         }
-        throw std::runtime_error("No Vulkan 1.4 graphics queue supports Win32 presentation");
+        throw std::runtime_error("No Vulkan 1.4 graphics queue supports the required presentation and texture features");
     }
 };
 
@@ -195,9 +214,13 @@ struct Swapchain
     const Vulkan &vk;
     VkSwapchainKHR handle = VK_NULL_HANDLE;
     std::vector<VkImage> images;
+    std::vector<VkImageView> views;
+    const bo1::VulkanImage &texture;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkExtent2D imageExtent{};
     std::vector<VkSemaphore> presentReady;
 
-    explicit Swapchain(const Vulkan &vulkan) : vk(vulkan) {}
+    Swapchain(const Vulkan &vulkan, const bo1::VulkanImage &source) : vk(vulkan), texture(source) {}
     ~Swapchain() { Reset(); }
 
     void Reset()
@@ -208,6 +231,11 @@ struct Swapchain
         for (auto semaphore : presentReady)
             vkDestroySemaphore(vk.device, semaphore, nullptr);
         presentReady.clear();
+        for (auto view : views)
+            vkDestroyImageView(vk.device, view, nullptr);
+        views.clear();
+        vkDestroyPipeline(vk.device, pipeline, nullptr);
+        pipeline = VK_NULL_HANDLE;
         images.clear();
         vkDestroySwapchainKHR(vk.device, handle, nullptr);
         handle = VK_NULL_HANDLE;
@@ -218,8 +246,8 @@ struct Swapchain
         VkSurfaceCapabilitiesKHR capabilities{};
         Check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk.physical, vk.surface, &capabilities),
               "Query surface capabilities");
-        if (!(capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT))
-            throw std::runtime_error("The surface cannot clear swapchain images with a transfer");
+        if (!(capabilities.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+            throw std::runtime_error("The surface does not support swapchain color attachments");
 
         const auto formats = Enumerate<VkSurfaceFormatKHR>([&](auto count, auto values) {
             return vkGetPhysicalDeviceSurfaceFormatsKHR(vk.physical, vk.surface, count, values);
@@ -260,7 +288,7 @@ struct Swapchain
         info.imageColorSpace = format.colorSpace;
         info.imageExtent = extent;
         info.imageArrayLayers = 1;
-        info.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         info.preTransform = capabilities.currentTransform;
         for (auto alpha : {VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
@@ -282,6 +310,19 @@ struct Swapchain
         images = Enumerate<VkImage>([&](auto count, auto values) {
             return vkGetSwapchainImagesKHR(vk.device, handle, count, values);
         });
+        imageExtent = extent;
+        views.resize(images.size(), VK_NULL_HANDLE);
+        for (std::size_t i = 0; i < images.size(); ++i)
+        {
+            VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            viewInfo.image = images[i];
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.format = format.format;
+            viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            Check(vkCreateImageView(vk.device, &viewInfo, nullptr, &views[i]), "Create swapchain image view");
+        }
+        if (texture.IsLoaded())
+            pipeline = texture.CreatePipeline(format.format);
         presentReady.resize(images.size(), VK_NULL_HANDLE);
         VkSemaphoreCreateInfo semaphoreInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         for (auto &semaphore : presentReady)
@@ -317,8 +358,8 @@ struct Swapchain
         if (acquired != VK_SUBOPTIMAL_KHR)
             Check(acquired, "Acquire swapchain image");
 
-        Record(images[index]);
-        const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        Record(index);
+        const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         submit.waitSemaphoreCount = 1;
         submit.pWaitSemaphores = &vk.imageReady;
@@ -343,7 +384,7 @@ struct Swapchain
             Reset();
     }
 
-    void Record(VkImage image)
+    void Record(uint32_t index)
     {
         Check(vkResetCommandBuffer(vk.command, 0), "Reset frame commands");
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -352,36 +393,66 @@ struct Swapchain
 
         VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = image;
+        barrier.image = images[index];
         barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(vk.command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &barrier);
-        const VkClearColorValue color{{0.024f, 0.037f, 0.055f, 1.0f}};
-        vkCmdClearColorImage(vk.command, image, barrier.newLayout, &color, 1, &barrier.subresourceRange);
+        constexpr auto colorStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        vkCmdPipelineBarrier(vk.command, colorStage, colorStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        VkRenderingAttachmentInfo attachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        attachment.imageView = views[index];
+        attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachment.clearValue.color = {{0.024f, 0.037f, 0.055f, 1.0f}};
+        VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        rendering.renderArea.extent = imageExtent;
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &attachment;
+        vkCmdBeginRendering(vk.command, &rendering);
+        if (pipeline)
+            texture.Draw(vk.command, pipeline, imageExtent);
+        vkCmdEndRendering(vk.command);
 
         barrier.oldLayout = barrier.newLayout;
         barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         barrier.dstAccessMask = 0;
-        vkCmdPipelineBarrier(vk.command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        vkCmdPipelineBarrier(vk.command, colorStage, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                              0, 0, nullptr, 0, nullptr, 1, &barrier);
         Check(vkEndCommandBuffer(vk.command), "End frame commands");
     }
 };
 }
 
-int main()
+int main(int argc, char **argv)
 {
     try
     {
+        if (argc > 2)
+            throw std::runtime_error("Usage: bo1_vulkan_probe [path-to-image.iwi]");
+        bo1::IwiImage source{};
+        if (argc == 2)
+        {
+            std::ifstream file(argv[1], std::ios::binary);
+            if (!file)
+                throw std::runtime_error(std::string("Cannot open IWI: ") + argv[1]);
+            const std::string bytes{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+            source = bo1::DecodeIwi(bytes);
+            std::printf("IWI: %u x %u\n", source.width, source.height);
+        }
+
         const Window window;
         Vulkan vk;
-        vk.Initialize(window);
-        Swapchain swapchain(vk);
+        vk.Initialize(window, argc == 2 && source.format != bo1::IwiFormat::bgra8);
+        bo1::VulkanImage texture(vk.device);
+        if (argc == 2)
+            texture.Upload(vk.physical, vk.pool, vk.queue, source);
+        Swapchain swapchain(vk, texture);
         VkExtent2D previous{};
         for (;;)
         {
