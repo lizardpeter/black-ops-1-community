@@ -46,6 +46,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build --preset "$edition-$($configuration.ToLowerInvariant())"
 
+      - name: Test enhanced FOV
+        if: matrix.edition == 'enhanced'
+        run: ctest --test-dir build/enhanced -C ${{ matrix.configuration }} --output-on-failure
+
       - name: Check executable
         shell: pwsh
         run: |

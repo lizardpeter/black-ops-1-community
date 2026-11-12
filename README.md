@@ -5,13 +5,13 @@ Windows x86 multiplayer builds of Call of Duty: Black Ops, based on [SwagSoftwar
 | Preset | Executable | Scope |
 | --- | --- | --- |
 | `faithful` | `KisakBlack.exe` | Upstream multiplayer reconstruction |
-| `enhanced` | `BlackOpsMP-Community.exe` | Same multiplayer engine with community changes under `enhanced/`. Windows file properties identify the enhanced build. |
+| `enhanced` | `BlackOpsMP-Community.exe` | Same multiplayer engine with community changes under `enhanced/`. Windows file properties identify the enhanced build. See [multiplayer modernization](docs/modernization.md) for raw mouse input and FOV settings. |
 
 The faithful preset refers to the upstream reconstruction. Retail binary parity, Campaign, and Zombies are outside the current build targets.
 
 ## Build on Windows
 
-Install Visual Studio 2022 with **Desktop development with C++**, CMake 3.21 or newer, and the [June 2010 DirectX SDK](https://www.microsoft.com/en-us/download/details.aspx?id=6812). Clone with submodules or initialize them in an existing checkout.
+Install Visual Studio 2022 with **Desktop development with C++**, CMake 3.21 or newer, Git, and the [June 2010 DirectX SDK](https://www.microsoft.com/en-us/download/details.aspx?id=6812). Clone with submodules or initialize them in an existing checkout.
 
 ```powershell
 git submodule update --init --recursive

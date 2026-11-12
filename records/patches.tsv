@@ -1,0 +1,3 @@
+id	functions	kind	description	tests
+P0001	IN_Init; IN_Shutdown; IN_Activate; IN_MouseMove	modernize	Use a dedicated Win32 Raw Input thread for relative mouse motion. Preserve the menu cursor and button messages. Drop background and absolute reports. Fall back to cursor motion if registration fails.	Windows compile/link; runtime pending
+P0002	CG_RegisterDvars; CG_GetViewFov; CG_CalcFov; R_StoreWindowSettings	feature	Expose horizontal FOV at 16:9, preserve the camera scale path, bound projection angles, and use the real aspect in auto mode.	tests/enhanced/fov_test.cpp

@@ -1,0 +1,171 @@
+--- a/src/win32/win_input.cpp
++++ b/src/win32/win_input.cpp
+@@ -1,4 +1,5 @@
+ #include "win_input.h"
++#include <enhanced/win32/win_rawinput.h>
+ #include "win_gamepad.h"
+ 
+ #include "win_wndproc.h"
+@@ -54,6 +55,7 @@
+ WinMouseVars_t s_wmv;
+ 
+ const dvar_t *in_mouse;
++static bool rawMouseActive;
+ //const dvar_s *gpad_present;
+ int in_appactive;
+ 
+@@ -181,6 +183,8 @@
+ 
+ void __cdecl IN_Shutdown()
+ {
++    BO1_StopRawMouse();
++    rawMouseActive = false;
+     IN_DeactivateMouse();
+ }
+ 
+@@ -188,10 +192,15 @@
+ {
+     in_mouse = _Dvar_RegisterBool("in_mouse", 1, 0x21u, "Initialize the mouse drivers");
+     IN_Startup();
++    rawMouseActive = s_wmv.mouseInitialized && BO1_StartRawMouse();
++    if (s_wmv.mouseInitialized && !rawMouseActive)
++        Com_Printf(16, "Raw mouse registration failed. Using cursor input.\n");
+ }
+ 
+ void __cdecl IN_Activate(int active)
+ {
++    if (rawMouseActive)
++        BO1_SetRawMouseWindow(active ? g_wv.hWnd : nullptr);
+     in_appactive = active;
+     if ( active )
+         IN_ActivateMouse(1);
+@@ -294,13 +303,20 @@
+     {
+         __debugbreak();
+     }
+-    if ( IN_IsForegroundWindow() )
+-    {
+-        GetCursorPos(&curPos);
++    const bool foreground = IN_IsForegroundWindow();
++    if (rawMouseActive)
++        BO1_SetRawMouseWindow(foreground ? g_wv.hWnd : nullptr);
++
++    if ( foreground )
++    {
++        if (!GetCursorPos(&curPos))
++            return;
+         if ( r_fullscreen->current.enabled )
+             IN_ClampMouseMove(&curPos);
+         v0 = curPos.x - s_wmv.oldPos.x;
+         dy = curPos.y - s_wmv.oldPos.y;
++        if (rawMouseActive)
++            BO1_TakeRawMouse(v0, dy);
+         if (curPos.x != s_wmv.oldPos.x || dy)
+         {
+             //BLOPS_NULLSUB();
+--- a/src/cgame_mp/cg_main_mp.cpp
++++ b/src/cgame_mp/cg_main_mp.cpp
+@@ -1,4 +1,5 @@
+ #include "cg_main_mp.h"
++#include <enhanced/cgame/fov.h>
+ #include <universal/q_shared.h>
+ #include <universal/com_memory.h>
+ #include <universal/assertive.h>
+@@ -445,6 +446,7 @@
+ 
+ void __cdecl CG_RegisterDvars()
+ {
++    BO1_RegisterFovDvar();
+     bool v0; // al
+ 
+     v0 = G_ExitAfterToolComplete();
+--- a/src/cgame/cg_camera.cpp
++++ b/src/cgame/cg_camera.cpp
+@@ -1,4 +1,5 @@
+ #include "cg_camera.h"
++#include <enhanced/cgame/fov.h>
+ 
+ #include "cg_weapons.h"
+ #include <bgame/bg_local.h>
+@@ -778,7 +779,8 @@
+     weapIndex = CG_GetPlayerWeapon(&cgameGlob->predictedPlayerState, localClientNum);
+     weapVariantDef = BG_GetWeaponVariantDef(weapIndex);
+     weapDef = BG_GetWeaponDef(weapIndex);
+-    viewFov = cg_fov->current.value;
++    const float baseFov = BO1_PlayerFov(cg_fov->current.value);
++    viewFov = baseFov;
+     if ( (viewFov < 1.0 || viewFov > 160.0)
+         && !Assert_MyHandler(
+                     "C:\\projects_pc\\cod\\codsrc\\src\\cgame\\cg_camera.cpp",
+@@ -897,7 +899,7 @@
+         && cgameGlob->predictedPlayerState.weaponstate == 35
+         && weapDef != BG_GetWeaponDef(0) )
+     {
+-        viewFova = cg_fov->current.value;
++        viewFova = baseFov;
+         if ( !weapDef->deployTime
+             && !Assert_MyHandler(
+                         "C:\\projects_pc\\cod\\codsrc\\src\\cgame\\cg_camera.cpp",
+@@ -908,7 +910,7 @@
+         {
+             __debugbreak();
+         }
+-        viewFov = (float)((float)(55.0 - cg_fov->current.value)
++        viewFov = (float)((float)(55.0 - baseFov)
+                                         * (float)(1.0
+                                                         - (float)((float)cgameGlob->predictedPlayerState.weaponTime / (float)weapDef->deployTime)))
+                         + viewFova;
+@@ -964,13 +966,13 @@
+     if ( fov_x <= 0.0 )
+         fov_x = CG_GetViewFov(localClientNum);
+ 
+-    fov_x = CG_UpdateCameraTweenFOV(localClientNum, fov_x);
++    fov_x = bo1::ClampProjectionFov(CG_UpdateCameraTweenFOV(localClientNum, fov_x));
+ 
+     dxDzAtDefaultAspectRatio = tan(DEG2RAD(fov_x) * 0.5);
+     cgameGlob->refdef.tanHalfFovX = (dxDzAtDefaultAspectRatio * 0.75) * cgs->viewAspect;
+     cgameGlob->refdef.tanHalfFovY = dxDzAtDefaultAspectRatio * 0.75;
+     cgameGlob->refdef.fov_x = fov_x;
+-    cgameGlob->zoomSensitivity = dxDzAtDefaultAspectRatio / tan(DEG2RAD(cg_fov->current.value) * 0.5f);
++    cgameGlob->zoomSensitivity = dxDzAtDefaultAspectRatio / tan(DEG2RAD(BO1_PlayerFov(cg_fov->current.value)) * 0.5f);
+ }
+ 
+ void __cdecl CG_CalculateGunnerOffset_Sway(
+--- a/src/gfx_d3d/r_init.cpp
++++ b/src/gfx_d3d/r_init.cpp
+@@ -1,4 +1,5 @@
+ #include "r_init.h"
++#include <enhanced/cgame/fov.h>
+ #include <win32/win_main.h>
+ #include <qcommon/common.h>
+ 
+@@ -644,7 +645,6 @@
+     bool v2; // [esp+0h] [ebp-3Ch]
+     int monitorHeight; // [esp+2Ch] [ebp-10h]
+     int monitorWidth; // [esp+30h] [ebp-Ch]
+-    int aspectHeight; // [esp+38h] [ebp-4h]
+ 
+     if ( !r_aspectRatio
+         && !Assert_MyHandler("C:\\projects_pc\\cod\\codsrc\\src\\gfx_d3d\\r_init.cpp", 476, 0, "%s", "r_aspectRatio") )
+@@ -670,20 +670,7 @@
+                 monitorWidth = vidConfig.displayWidth;
+                 monitorHeight = vidConfig.displayHeight;
+             }
+-            aspectHeight = (int)((float)((float)((float)monitorHeight * 16.0) / (float)monitorWidth) + 9.313225746154785e-10);
+-            if ( aspectHeight == 10 )
+-            {
+-                vidConfig.aspectRatioWindow = 1.6f;
+-            }
+-            else if ( aspectHeight >= 10 )
+-            {
+-                vidConfig.aspectRatioWindow = (1.0f + (1.0f / 3.0f));
+-            }
+-            else
+-            {
+-                //vidConfig.aspectRatioWindow = FLOAT_1_7777778;
+-                vidConfig.aspectRatioWindow = 1.7777778f;
+-            }
++            vidConfig.aspectRatioWindow = bo1::DisplayAspect(monitorWidth, monitorHeight);
+             break;
+         case 1:
+             vidConfig.aspectRatioWindow = (1.0f + (1.0f / 3.0f));

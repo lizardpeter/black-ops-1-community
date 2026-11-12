@@ -23,5 +23,6 @@ set_target_properties(KisakBlack PROPERTIES
 )
 
 if(BO1_COMMUNITY_ENHANCED)
+    enable_testing()
     add_subdirectory(enhanced)
 endif()
