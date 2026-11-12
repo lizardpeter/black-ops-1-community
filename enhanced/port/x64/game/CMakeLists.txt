@@ -11,6 +11,7 @@ set(engine_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/material-techniques.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/material-assets.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/table-assets.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/named-assets.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/optional-vpx.patch"
 )
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${upstream_cmake}" ${engine_patches})

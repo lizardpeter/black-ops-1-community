@@ -1,0 +1,435 @@
+--- a/src/database/db_load.cpp
++++ b/src/database/db_load.cpp
+@@ -1356,7 +1356,7 @@
+ }
+ 
+ template <typename T>
+-void LoadNativeTableAsset(bool atStreamStart, T *&target, T *&current, XAssetType type,
++void LoadNativeNamedAsset(bool atStreamStart, T *&target, T *&current, XAssetType type,
+                           T *XAssetHeader::*member, void (__cdecl *load)(bool),
+                           void (__cdecl *registerAsset)(XAssetHeader *))
+ {
+@@ -1437,7 +1437,7 @@
+ 
+ void __cdecl Load_PackIndexPtr(bool atStreamStart)
+ {
+-    LoadNativeTableAsset(atStreamStart, *varPackIndexPtr, varPackIndex, ASSET_TYPE_PACK_INDEX,
++    LoadNativeNamedAsset(atStreamStart, *varPackIndexPtr, varPackIndex, ASSET_TYPE_PACK_INDEX,
+                          &XAssetHeader::packIndex, Load_PackIndex, Load_PackIndexAsset);
+ }
+ 
+@@ -3247,44 +3247,31 @@
+ 
+ void __cdecl Load_GfxLightDef(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varGfxLightDef, 16);
+-    DB_PushStreamPos(4u);
+-    varXString = &varGfxLightDef->name;
+-    Load_XString(0);
+-    varGfxLightImage = &varGfxLightDef->attenuation;
+-    Load_GfxLightImage(0);
++    struct DiskLight
++    {
++        std::uint32_t name, image;
++        std::uint8_t samplerState;
++        std::int32_t lookupStart;
++    };
++    static_assert(sizeof(DiskLight) == 16 && offsetof(DiskLight, lookupStart) == 12);
++    DiskLight disk{};
++    if (!ReadTableHeader(atStreamStart, disk))
++        return;
++    auto &light = *varGfxLightDef;
++    light.lmapLookupStart = disk.lookupStart;
++    light.attenuation.samplerState = disk.samplerState;
++    DB_PushStreamPos(4);
++    light.name = DB_ReadNativeAssetName(disk.name);
++    light.attenuation.image = reinterpret_cast<GfxImage *>(static_cast<std::uintptr_t>(disk.image));
++    varGfxImagePtr = &light.attenuation.image;
++    Load_GfxImagePtr(false);
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_GfxLightDefPtr(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varGfxLightDefPtr, 4);
+-    DB_PushStreamPos(0);
+-    if ( *varGfxLightDefPtr )
+-    {
+-        value = (unsigned int)*varGfxLightDefPtr;
+-        if ( *varGfxLightDefPtr == (GfxLightDef *)-1 || value == -2 )
+-        {
+-            *varGfxLightDefPtr = (GfxLightDef *)AllocLoad_FxElemVisStateSample();
+-            varGfxLightDef = *varGfxLightDefPtr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_GfxLightDef(1);
+-            Load_LightDefAsset((XAssetHeader *)varGfxLightDefPtr);
+-            if ( inserted )
+-                *inserted = *varGfxLightDefPtr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varGfxLightDefPtr);
+-        }
+-    }
+-    DB_PopStreamPos();
++    LoadNativeNamedAsset(atStreamStart, *varGfxLightDefPtr, varGfxLightDef, ASSET_TYPE_LIGHT_DEF,
++                         &XAssetHeader::lightDef, Load_GfxLightDef, Load_LightDefAsset);
+ }
+ 
+ void __cdecl Load_GfxLight(bool atStreamStart)
+@@ -3416,44 +3403,44 @@
+ 
+ void __cdecl Load_PhysPreset(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varPhysPreset, 84);
+-    DB_PushStreamPos(4u);
+-    varXString = &varPhysPreset->name;
+-    Load_XString(0);
+-    varXString = &varPhysPreset->sndAliasPrefix;
+-    Load_XString(0);
++    struct DiskPreset
++    {
++        std::uint32_t name;
++        std::int32_t flags;
++        float mass, bounce, friction, bulletForceScale, explosiveForceScale;
++        std::uint32_t soundPrefix;
++        float piecesSpreadFraction, piecesUpwardVelocity;
++        std::int32_t canFloat;
++        float gravityScale, centerOfMassOffset[3], buoyancyBoxMin[3], buoyancyBoxMax[3];
++    };
++    static_assert(sizeof(DiskPreset) == 84 && offsetof(DiskPreset, soundPrefix) == 28);
++    DiskPreset disk{};
++    if (!ReadTableHeader(atStreamStart, disk))
++        return;
++    auto &preset = *varPhysPreset;
++    preset.flags = disk.flags;
++    preset.mass = disk.mass;
++    preset.bounce = disk.bounce;
++    preset.friction = disk.friction;
++    preset.bulletForceScale = disk.bulletForceScale;
++    preset.explosiveForceScale = disk.explosiveForceScale;
++    preset.piecesSpreadFraction = disk.piecesSpreadFraction;
++    preset.piecesUpwardVelocity = disk.piecesUpwardVelocity;
++    preset.canFloat = disk.canFloat;
++    preset.gravityScale = disk.gravityScale;
++    std::memcpy(preset.centerOfMassOffset, disk.centerOfMassOffset, sizeof(disk.centerOfMassOffset));
++    std::memcpy(preset.buoyancyBoxMin, disk.buoyancyBoxMin, sizeof(disk.buoyancyBoxMin));
++    std::memcpy(preset.buoyancyBoxMax, disk.buoyancyBoxMax, sizeof(disk.buoyancyBoxMax));
++    DB_PushStreamPos(4);
++    preset.name = DB_ReadNativeAssetName(disk.name);
++    preset.sndAliasPrefix = disk.soundPrefix ? DB_ReadNativeAssetName(disk.soundPrefix) : nullptr;
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_PhysPresetPtr(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varPhysPresetPtr, 4);
+-    DB_PushStreamPos(0);
+-    if ( *varPhysPresetPtr )
+-    {
+-        value = (unsigned int)*varPhysPresetPtr;
+-        if ( *varPhysPresetPtr == (PhysPreset *)-1 || value == -2 )
+-        {
+-            *varPhysPresetPtr = (PhysPreset *)AllocLoad_FxElemVisStateSample();
+-            varPhysPreset = *varPhysPresetPtr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_PhysPreset(1);
+-            Load_PhysPresetAsset((XAssetHeader *)varPhysPresetPtr);
+-            if ( inserted )
+-                *inserted = *varPhysPresetPtr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varPhysPresetPtr);
+-        }
+-    }
+-    DB_PopStreamPos();
++    LoadNativeNamedAsset(atStreamStart, *varPhysPresetPtr, varPhysPreset, ASSET_TYPE_PHYSPRESET,
++                         &XAssetHeader::physPreset, Load_PhysPreset, Load_PhysPresetAsset);
+ }
+ 
+ void __cdecl Mark_PhysPresetPtr()
+@@ -4888,48 +4875,33 @@
+ 
+ void __cdecl Load_MapEnts(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varMapEnts, 12);
+-    DB_PushStreamPos(4u);
+-    varXString = &varMapEnts->name;
+-    Load_XString(0);
+-    if ( varMapEnts->entityString )
+-    {
+-        varMapEnts->entityString = (char *)AllocLoad_raw_byte();
+-        varchar = varMapEnts->entityString;
+-        Load_charArray(1, varMapEnts->numEntityChars);
+-    }
++    struct DiskMapEnts
++    {
++        std::uint32_t name, entityString;
++        std::int32_t count;
++    };
++    static_assert(sizeof(DiskMapEnts) == 12);
++    DiskMapEnts disk{};
++    if (!ReadTableHeader(atStreamStart, disk))
++        return;
++    if (disk.count < 0 || (disk.count && !disk.entityString))
++    {
++        Com_Error(ERR_DROP, "Invalid map entity text length");
++        return;
++    }
++    auto &entities = *varMapEnts;
++    DB_PushStreamPos(4);
++    entities.name = DB_ReadNativeAssetName(disk.name);
++    entities.numEntityChars = disk.count;
++    entities.entityString = disk.entityString ?
++        reinterpret_cast<char *>(ReadTableRecords<char>(disk.count, 0)) : nullptr;
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_MapEntsPtr(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varMapEntsPtr, 4);
+-    DB_PushStreamPos(0);
+-    if ( *varMapEntsPtr )
+-    {
+-        value = (unsigned int)*varMapEntsPtr;
+-        if ( *varMapEntsPtr == (MapEnts *)-1 || value == -2 )
+-        {
+-            *varMapEntsPtr = (MapEnts *)AllocLoad_FxElemVisStateSample();
+-            varMapEnts = *varMapEntsPtr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_MapEnts(1);
+-            Load_MapEntsAsset((XAssetHeader *)varMapEntsPtr);
+-            if ( inserted )
+-                *inserted = *varMapEntsPtr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varMapEntsPtr);
+-        }
+-    }
+-    DB_PopStreamPos();
++    LoadNativeNamedAsset(atStreamStart, *varMapEntsPtr, varMapEnts, ASSET_TYPE_MAP_ENTS,
++                         &XAssetHeader::mapEnts, Load_MapEnts, Load_MapEntsAsset);
+ }
+ 
+ void __cdecl Mark_MapEntsPtr()
+@@ -6704,7 +6676,7 @@
+ 
+ void __cdecl Load_LocalizeEntryPtr(bool atStreamStart)
+ {
+-    LoadNativeTableAsset(atStreamStart, *varLocalizeEntryPtr, varLocalizeEntry, ASSET_TYPE_LOCALIZE_ENTRY,
++    LoadNativeNamedAsset(atStreamStart, *varLocalizeEntryPtr, varLocalizeEntry, ASSET_TYPE_LOCALIZE_ENTRY,
+                          &XAssetHeader::localize, Load_LocalizeEntry, Load_LocalizeEntryAsset);
+ }
+ 
+@@ -8032,42 +8004,32 @@
+ 
+ void __cdecl Load_XGlobals(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varXGlobals, 40);
+-    DB_PushStreamPos(4u);
+-    varXString = &varXGlobals->name;
+-    Load_XString(0);
++    struct DiskGlobals
++    {
++        std::uint32_t name;
++        std::int32_t xanimStreamBufferSize, cinematicMaxWidth, cinematicMaxHeight, extracamResolution, gumpReserve;
++        float screenClearColor[4];
++    };
++    static_assert(sizeof(DiskGlobals) == 40);
++    DiskGlobals disk{};
++    if (!ReadTableHeader(atStreamStart, disk))
++        return;
++    auto &globals = *varXGlobals;
++    globals.xanimStreamBufferSize = disk.xanimStreamBufferSize;
++    globals.cinematicMaxWidth = disk.cinematicMaxWidth;
++    globals.cinematicMaxHeight = disk.cinematicMaxHeight;
++    globals.extracamResolution = disk.extracamResolution;
++    globals.gumpReserve = disk.gumpReserve;
++    std::memcpy(globals.screenClearColor, disk.screenClearColor, sizeof(disk.screenClearColor));
++    DB_PushStreamPos(4);
++    globals.name = DB_ReadNativeAssetName(disk.name);
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_XGlobalsPtr(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varXGlobalsPtr, 4);
+-    DB_PushStreamPos(0);
+-    if ( *varXGlobalsPtr )
+-    {
+-        value = (unsigned int)*varXGlobalsPtr;
+-        if ( *varXGlobalsPtr == (XGlobals *)-1 || value == -2 )
+-        {
+-            *varXGlobalsPtr = (XGlobals *)AllocLoad_FxElemVisStateSample();
+-            varXGlobals = *varXGlobalsPtr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_XGlobals(1);
+-            Load_XGlobalsAsset((XAssetHeader *)varXGlobalsPtr);
+-            if ( inserted )
+-                *inserted = *varXGlobalsPtr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varXGlobalsPtr);
+-        }
+-    }
+-    DB_PopStreamPos();
++    LoadNativeNamedAsset(atStreamStart, *varXGlobalsPtr, varXGlobals, ASSET_TYPE_XGLOBALS,
++                         &XAssetHeader::xGlobals, Load_XGlobals, Load_XGlobalsAsset);
+ }
+ 
+ void __cdecl Mark_XGlobalsPtr()
+@@ -8151,7 +8113,7 @@
+ 
+ void __cdecl Load_StringTablePtr(bool atStreamStart)
+ {
+-    LoadNativeTableAsset(atStreamStart, *varStringTablePtr, varStringTable, ASSET_TYPE_STRINGTABLE,
++    LoadNativeNamedAsset(atStreamStart, *varStringTablePtr, varStringTable, ASSET_TYPE_STRINGTABLE,
+                          &XAssetHeader::stringTable, Load_StringTable, Load_StringTableAsset);
+ }
+ 
+--- a/src/database/db_file_load.cpp
++++ b/src/database/db_file_load.cpp
+@@ -633,7 +633,9 @@
+         if (asset.type == ASSET_TYPE_RAWFILE || asset.type == ASSET_TYPE_SNDDRIVER_GLOBALS ||
+             asset.type == ASSET_TYPE_IMAGE || asset.type == ASSET_TYPE_TECHNIQUE_SET ||
+             asset.type == ASSET_TYPE_MATERIAL || asset.type == ASSET_TYPE_PACK_INDEX ||
+-            asset.type == ASSET_TYPE_LOCALIZE_ENTRY || asset.type == ASSET_TYPE_STRINGTABLE)
++            asset.type == ASSET_TYPE_LOCALIZE_ENTRY || asset.type == ASSET_TYPE_STRINGTABLE ||
++            asset.type == ASSET_TYPE_LIGHT_DEF || asset.type == ASSET_TYPE_PHYSPRESET ||
++            asset.type == ASSET_TYPE_MAP_ENTS || asset.type == ASSET_TYPE_XGLOBALS)
+             DB_RecordNativeAssetAlias(serialized + sizeof(disk) * i + offsetof(FastfileAsset, header),
+                                      asset.type, asset.header.data);
+         if (g_load.abort)
+--- a/src/database/db_assetnames.cpp
++++ b/src/database/db_assetnames.cpp
+@@ -16,6 +16,9 @@
+ #include <bgame/bg_emblems.h>
+ #include <qcommon/com_bsp.h>
+ #include <gfx_d3d/r_extracam.h>
++#include <qcommon/cm_load_obj.h>
++#include <stringed/stringed_hooks.h>
++#include <universal/com_stringtable.h>
+ 
+ const char *(__cdecl *DB_XAssetGetNameHandler[43])(const XAssetHeader *) =
+ {
+@@ -158,13 +161,11 @@
+   NULL
+ };
+ 
+-static_assert(sizeof(RawFile) == 12);
+ int __cdecl DB_SizeofXAsset_RawFile_()
+ {
+     return 12;
+ }
+ 
+-static_assert(sizeof(PhysPreset) == 84);
+ int __cdecl DB_SizeofXAsset_PhysPreset_()
+ {
+     return 84;
+@@ -208,25 +209,21 @@
+     return 192;
+ }
+ 
+-static_assert(sizeof(MaterialTechniqueSet) == 528);
+ int __cdecl DB_SizeofXAsset_MaterialTechniqueSet_()
+ {
+     return 528;
+ }
+ 
+-static_assert(sizeof(SndDriverGlobals) == 52);
+ int __cdecl DB_SizeofXAsset_SndDriverGlobals_()
+ {
+     return 52;
+ }
+ 
+-static_assert(sizeof(XGlobals) == 40);
+ int __cdecl DB_SizeofXAsset_XGlobals_()
+ {
+     return 40;
+ }
+ 
+-static_assert(sizeof(StringTable) == 20);
+ int __cdecl DB_SizeofXAsset_StringTable_()
+ {
+     return 20;
+@@ -256,7 +253,6 @@
+     return 1084;
+ }
+ 
+-static_assert(sizeof(GfxLightDef) == 16);
+ int __cdecl DB_SizeofXAsset_GfxLightDef_()
+ {
+     return 16;
+@@ -286,7 +282,6 @@
+     return 60;
+ }
+ 
+-static_assert(sizeof(PackIndex) == 28);
+ int __cdecl DB_SizeofXAsset_PackIndex_()
+ {
+     return 28;
+@@ -363,12 +358,12 @@
+ 
+ const char *__cdecl DB_LocalizeEntryGetName(const XAssetHeader *header)
+ {
+-    return (const char *)header->xmodelPieces->numpieces;
++    return header->localize->name;
+ }
+ 
+ void __cdecl DB_LocalizeEntrySetName(XAssetHeader *header, const char *name)
+ {
+-    header->xmodelPieces->numpieces = (int)name;
++    header->localize->name = name;
+ }
+ 
+ void __cdecl DB_DDLSetname(XAssetHeader *header, const char *name)
+@@ -454,6 +449,22 @@
+ 
+ int __cdecl DB_GetXAssetTypeSize(int type)
+ {
++    // These x64 loaders hand native objects to the registry for cloning.
++    switch (type)
++    {
++    case ASSET_TYPE_RAWFILE: return sizeof(RawFile);
++    case ASSET_TYPE_PHYSPRESET: return sizeof(PhysPreset);
++    case ASSET_TYPE_MATERIAL: return sizeof(Material);
++    case ASSET_TYPE_TECHNIQUE_SET: return sizeof(MaterialTechniqueSet);
++    case ASSET_TYPE_IMAGE: return sizeof(GfxImage);
++    case ASSET_TYPE_SNDDRIVER_GLOBALS: return sizeof(SndDriverGlobals);
++    case ASSET_TYPE_XGLOBALS: return sizeof(XGlobals);
++    case ASSET_TYPE_STRINGTABLE: return sizeof(StringTable);
++    case ASSET_TYPE_LIGHT_DEF: return sizeof(GfxLightDef);
++    case ASSET_TYPE_PACK_INDEX: return sizeof(PackIndex);
++    case ASSET_TYPE_MAP_ENTS: return sizeof(MapEnts);
++    case ASSET_TYPE_LOCALIZE_ENTRY: return sizeof(LocalizeEntry);
++    }
+     if ( !DB_GetXAssetSizeHandler[type]
+         && !Assert_MyHandler(
+                     "C:\\projects_pc\\cod\\codsrc\\src\\database\\db_assetnames.cpp",
