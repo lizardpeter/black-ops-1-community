@@ -1,7 +1,10 @@
 # Reuse the pinned engine source list and target settings for the x64 port.
 set(upstream_cmake "${kisakblack_source}/CMakeLists.txt")
-set(physics_patch "${CMAKE_CURRENT_SOURCE_DIR}/physics.patch")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${upstream_cmake}" "${physics_patch}")
+set(engine_patches
+    "${CMAKE_CURRENT_SOURCE_DIR}/physics.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/fastfile.patch"
+)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${upstream_cmake}" ${engine_patches})
 find_package(Git REQUIRED)
 
 # Local includes must resolve the same x64 headers across all engine translation units.
@@ -10,7 +13,7 @@ file(COPY "${kisakblack_source}/src" "${kisakblack_source}/tl" "${kisakblack_sou
     DESTINATION "${bo1_engine_source}")
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env "GIT_CEILING_DIRECTORIES=${CMAKE_BINARY_DIR}"
-        "${GIT_EXECUTABLE}" apply --ignore-space-change "${physics_patch}"
+        "${GIT_EXECUTABLE}" apply --ignore-space-change ${engine_patches}
     WORKING_DIRECTORY "${bo1_engine_source}"
     RESULT_VARIABLE patch_result
     ERROR_VARIABLE patch_error

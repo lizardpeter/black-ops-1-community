@@ -1,0 +1,201 @@
+--- a/src/database/db_stream.cpp
++++ b/src/database/db_stream.cpp
+@@ -1,4 +1,5 @@
+ #include "db_stream.h"
++#include <cstdint>
+ #include <universal/assertive.h>
+ 
+ XBlock *g_streamBlocks;
+@@ -84,7 +85,9 @@
+     {
+         __debugbreak();
+     }
+-    g_streamPos = (unsigned __int8 *)(~alignment & (unsigned int)&g_streamPos[alignment]);
++    const auto mask = static_cast<std::uintptr_t>(alignment);
++    const auto address = reinterpret_cast<std::uintptr_t>(g_streamPos);
++    g_streamPos = reinterpret_cast<unsigned __int8 *>((address + mask) & ~mask);
+     return g_streamPos;
+ }
+ 
+--- a/src/database/db_file_load.cpp
++++ b/src/database/db_file_load.cpp
+@@ -12,6 +12,10 @@
+ #include "db_stream_load.h"
+ #include "db_load.h"
+ #include <tl/tl_system.h>
++#include <enhanced/port/x64/fastfile_reference.h>
++#include <cstring>
++#include <limits>
++#include <vector>
+ 
+ volatile int g_totalSize;
+ volatile unsigned int g_loadedSize;
+@@ -27,6 +31,89 @@
+ XAssetList g_varXAssetList;
+ 
+ DB_LoadData g_load;
++
++namespace
++{
++struct FastfileAssetList
++{
++    std::int32_t scriptStringCount;
++    std::uint32_t scriptStrings;
++    std::int32_t assetCount;
++    std::uint32_t assets;
++};
++static_assert(sizeof(FastfileAssetList) == 16);
++
++struct FastfileAsset
++{
++    std::uint32_t type;
++    std::uint32_t header;
++};
++static_assert(sizeof(FastfileAsset) == 8);
++
++// The database load thread owns this storage for the duration of a zone load.
++std::vector<const char *> nativeScriptStrings;
++std::vector<XAsset> nativeAssets;
++
++unsigned char *LoadFastfileArray(int count, unsigned int stride)
++{
++    if (count < 0 || static_cast<unsigned int>(count) >
++            static_cast<unsigned int>((std::numeric_limits<int>::max)()) / stride)
++    {
++        Com_Error(ERR_DROP, "Invalid fastfile array count in '%s'", g_load.filename);
++        return nullptr;
++    }
++
++    const int size = count * static_cast<int>(stride);
++    auto *data = DB_AllocStreamPos(3);
++    const auto &block = g_streamBlocks[g_streamPosIndex];
++    const auto position = reinterpret_cast<std::uintptr_t>(data);
++    const auto base = reinterpret_cast<std::uintptr_t>(block.data);
++    if (!block.data || position < base || position - base > block.size ||
++        static_cast<unsigned int>(size) > block.size - (position - base))
++    {
++        Com_Error(ERR_DROP, "Fastfile array exceeds the stream block in '%s'", g_load.filename);
++        return nullptr;
++    }
++    Load_Stream(true, data, size);
++    return data;
++}
++
++void LoadNativeScriptStrings(int count)
++{
++    auto *serialized = LoadFastfileArray(count, sizeof(std::uint32_t));
++    if (!serialized)
++        return;
++    nativeScriptStrings.resize(count);
++    for (int i = 0; i < count; ++i)
++    {
++        std::uint32_t encoded;
++        std::memcpy(&encoded, serialized + sizeof(encoded) * i, sizeof(encoded));
++        const auto reference = bo1::DecodeFastfileReference(encoded);
++        auto &value = nativeScriptStrings[i];
++        value = nullptr;
++        if (reference.kind == bo1::ReferenceKind::inlineData)
++        {
++            value = reinterpret_cast<const char *>(DB_AllocStreamPos(0));
++            Load_TempStringCustom(&value);
++        }
++        else if (reference.kind == bo1::ReferenceKind::blockOffset)
++        {
++            const auto &block = g_streamBlocks[reference.block];
++            const auto address = bo1::ResolveFastfileReference(
++                reference, reference.block, reinterpret_cast<const std::byte *>(block.data), block.size);
++            if (address)
++                value = reinterpret_cast<const char *>(*address);
++            else
++                Com_Error(ERR_DROP, "Invalid script string offset in '%s'", g_load.filename);
++        }
++        else if (reference.kind != bo1::ReferenceKind::absent)
++        {
++            Com_Error(ERR_DROP, "Invalid script string reference in '%s'", g_load.filename);
++        }
++    }
++    g_varXAssetList.stringList.strings = nativeScriptStrings.data();
++}
++}
+ 
+ double __cdecl DB_GetLoadedFraction()
+ {
+@@ -475,12 +562,8 @@
+     DB_InitStreams(g_load.blocks);
+     Load_XAssetListCustom();
+     DB_PushStreamPos(4u);
+-    if ( varXAssetList->assets )
+-    {
+-        varXAssetList->assets = AllocLoad_FxElemVisStateSample();
+-        varXAsset = varXAssetList->assets;
++    if (varXAssetList->assetCount)
+         Load_XAssetArrayCustom(varXAssetList->assetCount);
+-    }
+     DB_PopStreamPos();
+     Load_DelayStream();
+     --g_loadingAssets;
+@@ -505,28 +588,49 @@
+ 
+ void Load_XAssetListCustom()
+ {
++    FastfileAssetList disk{};
++    DB_LoadXFileData(reinterpret_cast<unsigned char *>(&disk), sizeof(disk));
+     varXAssetList = &g_varXAssetList;
+-    DB_LoadXFileData((unsigned __int8 *)&g_varXAssetList, 16);
+-    DB_PushStreamPos(4u);
+-    varScriptStringList = &varXAssetList->stringList;
+-    Load_ScriptStringList(0);
++    g_varXAssetList = {};
++    if (disk.assetCount < 0 || disk.scriptStringCount < 0 ||
++        (disk.assetCount && !disk.assets) || (disk.scriptStringCount && !disk.scriptStrings))
++    {
++        Com_Error(ERR_DROP, "Invalid asset list in fastfile '%s'", g_load.filename);
++        return;
++    }
++    g_varXAssetList.assetCount = disk.assetCount;
++    g_varXAssetList.stringList.count = disk.scriptStringCount;
++    DB_PushStreamPos(4);
++    if (disk.scriptStringCount)
++        LoadNativeScriptStrings(disk.scriptStringCount);
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_XAssetArrayCustom(int count)
+ {
+-    XAsset *var; // [esp+0h] [ebp-8h]
+-    int i; // [esp+4h] [ebp-4h]
+-
+-    Load_Stream(1, (unsigned __int8 *)varXAsset, 8 * count);
+-    var = varXAsset;
+-    for ( i = 0; i < count; ++i )
+-    {
++    auto *serialized = LoadFastfileArray(count, sizeof(FastfileAsset));
++    if (!serialized)
++        return;
++    nativeAssets.resize(count);
++    varXAssetList->assets = nativeAssets.data();
++    for (int i = 0; i < count; ++i)
++    {
++        FastfileAsset disk;
++        std::memcpy(&disk, serialized + sizeof(disk) * i, sizeof(disk));
++        auto &asset = nativeAssets[i];
++        asset.type = static_cast<XAssetType>(disk.type);
++        const auto reference = bo1::DecodeFastfileReference(disk.header);
++        std::uintptr_t encoded = disk.header;
++        if (reference.kind == bo1::ReferenceKind::inlineData)
++            encoded = UINTPTR_MAX;
++        else if (reference.kind == bo1::ReferenceKind::inlineWithFixup)
++            encoded = UINTPTR_MAX - 1;
++        asset.header.data = reinterpret_cast<void *>(encoded);
++
+         skipShaderCreationHack = i == skipLoadingMaterialsHack;
+-        varXAsset = var;
+-        Load_XAsset(0);
+-        ++var;
+-        if ( g_load.abort )
++        varXAsset = &asset;
++        Load_XAsset(false);
++        if (g_load.abort)
+             break;
+     }
+ }
