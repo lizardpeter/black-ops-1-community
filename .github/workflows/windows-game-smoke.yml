@@ -1,0 +1,73 @@
+name: BO1 retail multiplayer launch
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/windows-game-smoke.yml'
+      - 'scripts/stage_bo1_r2.py'
+      - 'scripts/smoke_bo1.ps1'
+
+permissions:
+  contents: read
+
+jobs:
+  launch:
+    runs-on: windows-2022
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Extract DirectX SDK
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'DXSDK_Jun10.exe'
+          $extract = Join-Path $env:RUNNER_TEMP 'directx-sdk'
+          $url = 'https://download.microsoft.com/download/a/e/7/ae743f1f-632b-4809-87a9-aa1bb3458e31/DXSDK_Jun10.exe'
+          curl.exe --fail --location --retry 3 --output $installer $url
+          if ($LASTEXITCODE -ne 0) { throw 'DirectX SDK download failed' }
+          & "$env:ProgramFiles\7-Zip\7z.exe" x $installer "-o$extract" 'DXSDK/Include/*' 'DXSDK/Lib/x86/*' -r -y
+          if ($LASTEXITCODE -ne 0) { throw 'DirectX SDK extraction failed' }
+          $sdk = Join-Path $extract 'DXSDK'
+          if (!(Test-Path (Join-Path $sdk 'Include/d3dx9.h'))) { throw 'DirectX SDK headers missing' }
+          "DXSDK_DIR=$sdk" >> $env:GITHUB_ENV
+
+      - name: Build the enhanced BO1 executable
+        shell: pwsh
+        run: |
+          cmake --preset enhanced
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset enhanced-release --target KisakBlack
+
+      - name: Install the legacy DirectX runtime for the D3D9 build
+        shell: pwsh
+        run: |
+          $package = Join-Path $env:RUNNER_TEMP 'directx-redist.exe'
+          $redist = Join-Path $env:RUNNER_TEMP 'directx-redist'
+          $url = 'https://download.microsoft.com/download/8/4/A/84A35BF1-DAFE-4AE8-82AF-AD2AE20B6B14/directx_Jun2010_redist.exe'
+          curl.exe --fail --location --retry 3 --output $package $url
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:ProgramFiles\7-Zip\7z.exe" x $package "-o$redist" -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $install = Start-Process (Join-Path $redist 'DXSETUP.exe') -ArgumentList '/silent' -PassThru -Wait
+          if ($install.ExitCode -ne 0) { throw "DirectX setup exited $($install.ExitCode)" }
+
+      - uses: actions/checkout@v5
+        with:
+          repository: lizardpeter/r2-runners
+          ref: 98293d9eabdff2284bd9443c32ab52ecd93d9d99
+          path: r2-runners
+          persist-credentials: false
+
+      - name: Stage BO1 retail assets using the R2 runner
+        shell: pwsh
+        run: |
+          python scripts/stage_bo1_r2.py --runners r2-runners --destination "$env:RUNNER_TEMP/bo1-game"
+
+      - name: Boot the game and verify a local multiplayer frame
+        shell: pwsh
+        run: |
+          ./scripts/smoke_bo1.ps1 -GameDirectory "$env:RUNNER_TEMP/bo1-game" `
+            -Executable build/enhanced/Release/BlackOpsMP-Community.exe

@@ -8,6 +8,7 @@ set(overlay_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/kisakblack.patch")
 set(overlay_units
     src/database/db_load.cpp
     src/client_mp/cl_main_mp.cpp
+    src/client_mp/cl_scrn_mp.cpp
     src/client_mp/sv_client_mp.cpp
     src/win32/win_main.cpp
     src/cgame/cg_camera.cpp

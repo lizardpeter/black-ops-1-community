@@ -530,3 +530,25 @@
  }
  
  void __cdecl Load_MaterialTextureDefInfo(bool atStreamStart)
+--- a/src/client_mp/cl_scrn_mp.cpp
++++ b/src/client_mp/cl_scrn_mp.cpp
+@@ -1,4 +1,5 @@
+ #include "cl_scrn_mp.h"
++#include <cstdlib>
+ #include <gfx_d3d/r_font.h>
+ #include <gfx_d3d/r_rendercmds.h>
+ #include "cl_main_mp.h"
+@@ -557,6 +558,13 @@
+         0,
+         v6))
+     {
++        static const bool launchCheck = std::getenv("BO1_LAUNCH_CHECK") != nullptr;
++        static bool firstActiveFrame = true;
++        if (launchCheck && firstActiveFrame)
++        {
++            Com_Printf(14, "BO1_LAUNCH_CHECK: active multiplayer frame\n");
++            firstActiveFrame = false;
++        }
+         //BG_EvalVehicleName();
+         if ((CL_GetLocalClientUIGlobals(localClientNum)->keyCatchers & 0x10) != 0)
+         {
