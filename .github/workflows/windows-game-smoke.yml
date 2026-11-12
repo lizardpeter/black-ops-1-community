@@ -8,6 +8,7 @@ on:
       - '.github/workflows/windows-game-smoke.yml'
       - 'scripts/stage_bo1_r2.py'
       - 'scripts/smoke_bo1.ps1'
+      - 'enhanced/patches/kisakblack.patch'
 
 permissions:
   contents: read

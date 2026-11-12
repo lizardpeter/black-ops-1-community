@@ -552,3 +552,22 @@
          //BG_EvalVehicleName();
          if ((CL_GetLocalClientUIGlobals(localClientNum)->keyCatchers & 0x10) != 0)
          {
+--- a/src/gfx_d3d/r_state.cpp
++++ b/src/gfx_d3d/r_state.cpp
+@@ -2216,6 +2216,16 @@
+ 
+     if ( !image && !Assert_MyHandler("C:\\projects_pc\\cod\\codsrc\\src\\gfx_d3d\\r_state.cpp", 2320, 0, "%s", "image") )
+         __debugbreak();
++    // Some startup passes bind textures before their command state inherits the device.
++    if (!context.state->prim.device)
++    {
++        if (!dx.device)
++        {
++            Com_Error(ERR_FATAL, "Texture binding requested before Direct3D device creation");
++            return;
++        }
++        context.state->prim.device = dx.device;
++    }
+     if ( (const GfxImage *)context.state->samplerTexture[samplerIndex] != image )
+     {
+         context.state->samplerTexture[samplerIndex] = &image->texture;

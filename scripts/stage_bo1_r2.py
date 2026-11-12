@@ -41,9 +41,13 @@ def main():
     parser.add_argument("--destination", type=Path, required=True)
     args = parser.parse_args()
     sys.path.insert(0, str(args.runners / "scripts"))
+    import bo1_full_game_range as remote_zip
     from bo1_full_game_range import BO1_ZIP_KEY, EXPECTED_SIZE, HttpRangeObject, R2_BASES
     from r2_download import download
 
+    # Large retail members benefit from fewer R2 requests while retaining bounded reads.
+    remote_zip.BLOCK_SIZE = 16 * 1024**2
+    remote_zip.CACHE_BLOCKS = 4
     args.destination.mkdir(parents=True, exist_ok=True)
     with ExitStack() as cleanup:
         archive = None
