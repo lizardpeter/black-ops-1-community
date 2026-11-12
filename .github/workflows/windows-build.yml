@@ -50,9 +50,31 @@ jobs:
         run: |
           $edition = '${{ matrix.edition }}'
           $configuration = '${{ matrix.configuration }}'
-          cmake --preset $edition
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build --preset "$edition-$($configuration.ToLowerInvariant())"
+          if ($edition -eq 'enhanced-x64') {
+            $log = Join-Path $env:RUNNER_TEMP 'bo1-x64-build.log'
+            cmake --preset $edition 2>&1 | Tee-Object -FilePath $log
+            $code = $LASTEXITCODE
+            if ($code -eq 0) {
+              cmake --build --preset "$edition-$($configuration.ToLowerInvariant())" 2>&1 |
+                Tee-Object -FilePath $log -Append
+              $code = $LASTEXITCODE
+            }
+            if ($code -ne 0) {
+              $errors = Get-Content $log |
+                Select-String 'CMake Error|(?:fatal )?error (?:C|LNK|MSB)\d+' |
+                ForEach-Object { $_.Line.Trim() -replace ' \[.*?\.vcxproj\]$', '' } |
+                Select-Object -Unique -First 12
+              if (!$errors) { $errors = Get-Content $log -Tail 10 }
+              foreach ($line in $errors) {
+                Write-Host "::error title=BO1 x64 build::$($line.Replace('%', '%25'))"
+              }
+              exit $code
+            }
+          } else {
+            cmake --preset $edition
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cmake --build --preset "$edition-$($configuration.ToLowerInvariant())"
+          }
 
       - name: Test enhanced FOV
         if: matrix.edition == 'enhanced' || matrix.edition == 'enhanced-x64'
