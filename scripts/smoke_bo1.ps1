@@ -27,6 +27,13 @@ try {
                 break
             }
         }
+        if ($log) {
+            $textureFailure = Select-String -LiteralPath $log.FullName -SimpleMatch 'BO1_TEXTURE_FAILURE:' |
+                Select-Object -Last 1
+            if ($textureFailure) {
+                throw $textureFailure.Line
+            }
+        }
         Start-Sleep -Seconds 2
     }
     if (!$passed) {

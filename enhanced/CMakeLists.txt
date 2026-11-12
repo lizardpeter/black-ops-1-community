@@ -13,6 +13,7 @@ set(overlay_units
     src/win32/win_main.cpp
     src/cgame/cg_camera.cpp
     src/cgame_mp/cg_main_mp.cpp
+    src/gfx_d3d/r_image.cpp
     src/gfx_d3d/r_init.cpp
     src/gfx_d3d/r_state.cpp
     src/win32/win_gamepad.cpp

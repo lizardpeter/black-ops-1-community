@@ -571,3 +571,16 @@
      if ( (const GfxImage *)context.state->samplerTexture[samplerIndex] != image )
      {
          context.state->samplerTexture[samplerIndex] = &image->texture;
+--- a/src/gfx_d3d/r_image.cpp
++++ b/src/gfx_d3d/r_image.cpp
+@@ -416,6 +416,10 @@
+     if ( hr < 0 )
+     {
+         ++g_disableRendering;
++        Com_PrintError(8,
++            "BO1_TEXTURE_FAILURE: %s %ux%u mips=%u flags=0x%08X usage=0x%08X format=0x%08X pool=%u hr=0x%08X\n",
++            image->name ? image->name : "<unnamed>", unsigned(width), unsigned(height), mipmapCount,
++            unsigned(imageFlags), usage, unsigned(imageFormat), unsigned(memPool), unsigned(hr));
+         v6 = R_ErrorDescription(hr);
+         Com_Error(
+             ERR_FATAL,
