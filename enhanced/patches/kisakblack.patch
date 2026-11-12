@@ -770,3 +770,36 @@
                  return;
              }
          }
+--- a/src/win32/win_shared.cpp
++++ b/src/win32/win_shared.cpp
+@@ -1,6 +1,10 @@
+ #include "win_shared.h"
+ 
+ #include <Windows.h>
++
++#if defined(_M_X64)
++#include <qcommon/common.h>
++#endif
+ 
+ int sys_timeBase;
+ 
+@@ -33,6 +37,11 @@
+ // https://github.com/id-Software/Quake-III-Arena/blob/master/code/win32/win_shared.c
+ void Sys_SnapVector(float *v)
+ {
++#if defined(_M_X64)
++    v[0] = SnapFloat(v[0]);
++    v[1] = SnapFloat(v[1]);
++    v[2] = SnapFloat(v[2]);
++#else
+     int i;
+     float f;
+ 
+@@ -50,4 +59,5 @@
+     __asm	fld		f;
+     __asm	fistp	i;
+     *v = i;
+-}
+\ No newline at end of file
++#endif
++}

@@ -18,12 +18,18 @@
       "name": "enhanced",
       "inherits": "win32",
       "cacheVariables": { "BO1_COMMUNITY_ENHANCED": true }
+    },
+    {
+      "name": "enhanced-x64",
+      "inherits": "enhanced",
+      "architecture": "x64"
     }
   ],
   "buildPresets": [
     { "name": "faithful-release", "configurePreset": "faithful", "configuration": "Release" },
     { "name": "faithful-debug", "configurePreset": "faithful", "configuration": "Debug" },
     { "name": "enhanced-release", "configurePreset": "enhanced", "configuration": "Release" },
-    { "name": "enhanced-debug", "configurePreset": "enhanced", "configuration": "Debug" }
+    { "name": "enhanced-debug", "configurePreset": "enhanced", "configuration": "Debug" },
+    { "name": "enhanced-x64-release", "configurePreset": "enhanced-x64", "configuration": "Release" }
   ]
 }

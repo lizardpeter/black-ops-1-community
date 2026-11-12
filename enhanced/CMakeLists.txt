@@ -11,6 +11,7 @@ set(overlay_units
     src/client_mp/cl_scrn_mp.cpp
     src/client_mp/sv_client_mp.cpp
     src/win32/win_main.cpp
+    src/win32/win_shared.cpp
     src/cgame/cg_camera.cpp
     src/cgame_mp/cg_main_mp.cpp
     src/gfx_d3d/r_image.cpp

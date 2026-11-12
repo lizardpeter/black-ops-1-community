@@ -21,6 +21,9 @@ jobs:
       matrix:
         edition: [faithful, enhanced]
         configuration: [Debug, Release]
+        include:
+          - edition: enhanced-x64
+            configuration: Release
 
     steps:
       - uses: actions/checkout@v5
@@ -32,10 +35,11 @@ jobs:
         run: |
           $installer = Join-Path $env:RUNNER_TEMP 'DXSDK_Jun10.exe'
           $extract = Join-Path $env:RUNNER_TEMP 'directx-sdk'
+          $architecture = if ('${{ matrix.edition }}' -eq 'enhanced-x64') { 'x64' } else { 'x86' }
           $url = 'https://download.microsoft.com/download/a/e/7/ae743f1f-632b-4809-87a9-aa1bb3458e31/DXSDK_Jun10.exe'
           curl.exe --fail --location --retry 3 --output $installer $url
           if ($LASTEXITCODE -ne 0) { throw 'DirectX SDK download failed' }
-          & "$env:ProgramFiles\7-Zip\7z.exe" x $installer "-o$extract" 'DXSDK/Include/*' 'DXSDK/Lib/x86/*' -r -y
+          & "$env:ProgramFiles\7-Zip\7z.exe" x $installer "-o$extract" 'DXSDK/Include/*' "DXSDK/Lib/$architecture/*" -r -y
           if ($LASTEXITCODE -ne 0) { throw 'DirectX SDK extraction failed' }
           $sdk = Join-Path $extract 'DXSDK'
           if (!(Test-Path (Join-Path $sdk 'Include/d3dx9.h'))) { throw 'DirectX SDK headers missing' }
@@ -51,7 +55,7 @@ jobs:
           cmake --build --preset "$edition-$($configuration.ToLowerInvariant())"
 
       - name: Test enhanced FOV
-        if: matrix.edition == 'enhanced'
+        if: matrix.edition == 'enhanced' || matrix.edition == 'enhanced-x64'
         run: ctest --test-dir build/enhanced -C ${{ matrix.configuration }} --output-on-failure
 
       - name: Check executable
@@ -59,7 +63,7 @@ jobs:
         run: |
           $edition = '${{ matrix.edition }}'
           $configuration = '${{ matrix.configuration }}'
-          $file = if ($edition -eq 'enhanced') { 'BlackOpsMP-Community.exe' } else { 'KisakBlack.exe' }
+          $file = if ($edition -like 'enhanced*') { 'BlackOpsMP-Community.exe' } else { 'KisakBlack.exe' }
           $path = "build/$edition/$configuration/$file"
           if (!(Test-Path $path -PathType Leaf)) {
             Write-Host "::error::Expected executable missing at $path"
@@ -68,12 +72,13 @@ jobs:
           $exe = Get-Item $path
           $bytes = [IO.File]::ReadAllBytes($exe.FullName)
           $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+          $machine = if ($edition -eq 'enhanced-x64') { 0x8664 } else { 0x14c }
           if ([BitConverter]::ToUInt32($bytes, $peOffset) -ne 0x4550 -or
-              [BitConverter]::ToUInt16($bytes, $peOffset + 4) -ne 0x14c) {
-            Write-Host "::error::Expected an x86 Windows executable at $exe"
+              [BitConverter]::ToUInt16($bytes, $peOffset + 4) -ne $machine) {
+            Write-Host "::error::Unexpected Windows executable architecture at $exe"
             exit 1
           }
-          if ($edition -eq 'enhanced') {
+          if ($edition -like 'enhanced*') {
             $description = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe.FullName).FileDescription
             if ($description -cne 'Black Ops Multiplayer - Community Enhanced') {
               Write-Host "::error::Unexpected file description '$description' in $path"
