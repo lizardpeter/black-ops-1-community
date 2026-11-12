@@ -1,0 +1,68 @@
+--- a/src/gfx_d3d/r_dvars.cpp
++++ b/src/gfx_d3d/r_dvars.cpp
+@@ -531,7 +531,13 @@
+ { "none", "normal", "basisTangent", "basisBinormal", "basisNormal", NULL };
+ 
+ const char *codecNames[3] =
+-{ "MJPEG", "VP8", NULL };
++{
++    "MJPEG",
++#if !defined(BO1_WITHOUT_VPX)
++    "VP8",
++#endif
++    NULL
++};
+ 
+ const char *clipSizeNames[5] =
+ { "360", "480", "720", "1080", NULL };
+--- a/src/mjpeg/avi.cpp
++++ b/src/mjpeg/avi.cpp
+@@ -4,7 +4,9 @@
+ #include <Windows.h>
+ #include "yuv.h"
+ #include <gfx_d3d/r_dvars.h>
++#if !defined(BO1_WITHOUT_VPX)
+ #include <vpx/vpx.h>
++#endif
+ #include "mjpeg.h"
+ #include <qcommon/threads.h>
+ #include <universal/q_shared.h>
+@@ -233,9 +235,11 @@
+         AVI = new avi_s;
+     }
+     yuv_init(width, height, 1);
+-    if ( r_clipCodec->current.integer == 1 )
++#if !defined(BO1_WITHOUT_VPX)
++    if (r_clipCodec->current.integer == 1)
+         vpx_init(szFile, width, height);
+     else
++#endif
+         AVI->create(szFile, width, height, fps);
+     mjpeg_run_encoder = 1;
+ }
+@@ -517,9 +521,11 @@
+ 
+ void __cdecl mjpeg_add_frame(unsigned __int8 *y, unsigned __int8 *u, unsigned __int8 *v)
+ {
+-    if ( r_clipCodec->current.integer == 1 )
++#if !defined(BO1_WITHOUT_VPX)
++    if (r_clipCodec->current.integer == 1)
+         vpx_encode_frame(y, u, v, 0);
+     else
++#endif
+         AVI->add_frame(y, u, v);
+ }
+ 
+@@ -626,9 +632,11 @@
+ 
+ void __cdecl mjpeg_close_int()
+ {
+-    if ( r_clipCodec->current.integer == 1 )
++#if !defined(BO1_WITHOUT_VPX)
++    if (r_clipCodec->current.integer == 1)
+         vpx_shutdown();
+     else
++#endif
+         AVI->close();
+     yuv_shutdown();
+     operator delete(AVI);

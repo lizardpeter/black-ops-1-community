@@ -6,6 +6,7 @@ set(engine_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/fastfile.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/raw-file.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/sound-and-state.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/optional-vpx.patch"
 )
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${upstream_cmake}" ${engine_patches})
 find_package(Git REQUIRED)
@@ -47,4 +48,9 @@ string(REPLACE "target_link_directories(KisakBlack PUBLIC \"${bo1_engine_source}
 cmake_language(EVAL CODE "${engine_cmake}")
 if(BO1_X64_VPX_LIBRARY)
     target_link_libraries(KisakBlack PUBLIC "${BO1_X64_VPX_LIBRARY}")
+else()
+    get_target_property(engine_sources KisakBlack SOURCES)
+    list(REMOVE_ITEM engine_sources "${bo1_engine_source}/src/vpx/vpx.cpp")
+    set_property(TARGET KisakBlack PROPERTY SOURCES "${engine_sources}")
+    target_compile_definitions(KisakBlack PRIVATE BO1_WITHOUT_VPX)
 endif()
