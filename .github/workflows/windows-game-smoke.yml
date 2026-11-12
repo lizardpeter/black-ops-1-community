@@ -41,6 +41,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build --preset enhanced-release --target KisakBlack
 
+      - name: Save the compiled executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: black-ops-mp-community-win32
+          path: build/enhanced/Release/BlackOpsMP-Community.exe
+          if-no-files-found: error
+
       - name: Install the legacy DirectX runtime for the D3D9 build
         shell: pwsh
         run: |
@@ -69,5 +76,11 @@ jobs:
       - name: Boot the game and verify a local multiplayer frame
         shell: pwsh
         run: |
-          ./scripts/smoke_bo1.ps1 -GameDirectory "$env:RUNNER_TEMP/bo1-game" `
-            -Executable build/enhanced/Release/BlackOpsMP-Community.exe
+          try {
+            ./scripts/smoke_bo1.ps1 -GameDirectory "$env:RUNNER_TEMP/bo1-game" `
+              -Executable build/enhanced/Release/BlackOpsMP-Community.exe
+          } catch {
+            $message = $_.Exception.Message -replace '[\r\n]+', ' '
+            Write-Host "::error title=BO1 launch failed::$message"
+            throw
+          }

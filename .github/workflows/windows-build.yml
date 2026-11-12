@@ -2,6 +2,10 @@ name: Windows multiplayer build
 
 on:
   push:
+    paths-ignore:
+      - '.github/workflows/windows-game-smoke.yml'
+      - 'scripts/stage_bo1_r2.py'
+      - 'scripts/smoke_bo1.ps1'
   pull_request:
   workflow_dispatch:
 

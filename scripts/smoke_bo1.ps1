@@ -12,7 +12,9 @@ $process = Start-Process $launch -WorkingDirectory $game -PassThru -ArgumentList
     'allowdupe', '+set', 'logfile', '2', '+set', 'r_fullscreen', '0',
     '+set', 'g_gametype', 'dm', '+map', 'mp_nuked'
 )
-$deadline = (Get-Date).AddMinutes(4)
+$start = Get-Date
+$deadline = $start.AddMinutes(4)
+$log = $null
 $passed = $false
 try {
     while ((Get-Date) -lt $deadline -and !$process.HasExited) {
@@ -28,6 +30,21 @@ try {
         Start-Sleep -Seconds 2
     }
     if (!$passed) {
+        $log = Get-ChildItem $game -Filter console_mp.log -File -Recurse |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($log) {
+            $tail = (Get-Content -LiteralPath $log.FullName -Tail 20) -join ' | '
+            Write-Host "::warning title=Last BO1 console lines::$tail"
+        }
+        $events = Get-WinEvent -FilterHashtable @{
+            LogName = 'Application'
+            StartTime = $start.AddSeconds(-2)
+            Id = 1000, 1001
+        } -ErrorAction SilentlyContinue
+        foreach ($event in ($events | Where-Object { $_.Message -match 'BlackOpsMP-Community' } | Select-Object -First 2)) {
+            $message = ($event.Message -replace '[\r\n]+', ' ')
+            Write-Host "::warning title=Windows application event::$message"
+        }
         if ($process.HasExited) {
             throw ('BO1 exited before rendering an active multiplayer frame. Exit code 0x{0:X8}' -f $process.ExitCode)
         }
