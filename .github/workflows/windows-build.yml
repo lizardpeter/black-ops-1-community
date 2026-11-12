@@ -76,9 +76,17 @@ jobs:
             cmake --build --preset "$edition-$($configuration.ToLowerInvariant())"
           }
 
+      - name: Upload full x64 compiler diagnostics
+        if: failure() && matrix.edition == 'enhanced-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bo1-x64-build-diagnostics
+          path: ${{ runner.temp }}/bo1-x64-build.log
+          if-no-files-found: ignore
+
       - name: Test enhanced FOV
         if: matrix.edition == 'enhanced' || matrix.edition == 'enhanced-x64'
-        run: ctest --test-dir build/enhanced -C ${{ matrix.configuration }} --output-on-failure
+        run: ctest --test-dir build/${{ matrix.edition }} -C ${{ matrix.configuration }} --output-on-failure
 
       - name: Check executable
         shell: pwsh
