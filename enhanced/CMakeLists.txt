@@ -9,6 +9,7 @@ set(overlay_units
     src/cgame/cg_camera.cpp
     src/cgame_mp/cg_main_mp.cpp
     src/gfx_d3d/r_init.cpp
+    src/win32/win_gamepad.cpp
     src/win32/win_input.cpp
 )
 
@@ -41,6 +42,15 @@ if(NOT patch_result EQUAL 0)
 endif()
 
 set_property(TARGET KisakBlack PROPERTY SOURCES "${engine_sources}")
+get_target_property(engine_libraries KisakBlack LINK_LIBRARIES)
+if(NOT "xinput.lib" IN_LIST engine_libraries)
+    message(FATAL_ERROR "Review the upstream XInput linkage before building the enhanced edition")
+endif()
+list(REMOVE_ITEM engine_libraries "xinput.lib")
+set_property(TARGET KisakBlack PROPERTY LINK_LIBRARIES "${engine_libraries}")
+get_target_property(engine_interface KisakBlack INTERFACE_LINK_LIBRARIES)
+list(REMOVE_ITEM engine_interface "xinput.lib")
+set_property(TARGET KisakBlack PROPERTY INTERFACE_LINK_LIBRARIES "${engine_interface}")
 target_include_directories(KisakBlack PRIVATE "${PROJECT_SOURCE_DIR}")
 target_sources(KisakBlack PRIVATE cgame/fov.cpp win32/win_rawinput.cpp)
 

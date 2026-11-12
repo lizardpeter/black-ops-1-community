@@ -90,6 +90,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $dlls = $imports | ForEach-Object { if ($_ -match '^\s+(\S+\.dll)\s*$') { $Matches[1] } }
           if (!$dlls) { throw 'No DLL imports found' }
+          if ($dlls -match '^xinput.*\.dll$') {
+            Write-Host '::error::Enhanced build unexpectedly imports XInput'
+            exit 1
+          }
           Write-Host "::notice title=Executable DLL imports::$($dlls -join ', ')"
           "### DLL imports ($configuration)" >> $env:GITHUB_STEP_SUMMARY
           '' >> $env:GITHUB_STEP_SUMMARY

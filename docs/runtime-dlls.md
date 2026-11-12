@@ -21,3 +21,5 @@ Game data still comes from a local BO1 installation. Use the pinned KisakBlack s
 - **Debug:** `d3dx9d_43.dll`, `msvcp140d.dll`, `vcruntime140d.dll`, `ucrtbased.dll`, and `dbghelp.dll`.
 
 The import tables omit `vpx.dll`. The linked static VPX archive supplies the encoder. A live run is still needed to log the full set of modules loaded by Steam, COM, and vendor libraries.
+
+The enhanced controller-free build removes the XInput link and checks its PE imports in CI. The import list above records the earlier baseline. Steam, Bink, and DirectX migration remain separate build changes. See [native Windows audio](audio.md) for the DirectSound and XAudio2 paths.

@@ -169,3 +169,80 @@
              break;
          case 1:
              vidConfig.aspectRatioWindow = (1.0f + (1.0f / 3.0f));
+--- a/src/win32/win_gamepad.cpp
++++ b/src/win32/win_gamepad.cpp
+@@ -22,9 +22,6 @@
+ const dvar_t *gpad_present;
+ 
+ GamePad s_gamePads[1];
+-int inputCounter;
+-bool hasInput[1];
+-_XINPUT_STATE delayedInputState[1];
+ void(__cdecl *s_removedCB)(int);
+ void(__cdecl *s_insertedCB)(int);
+ 
+@@ -115,51 +112,12 @@
+         gPad = &s_gamePads[portIndex];
+         gPad->feedback.Rumble.wLeftMotorSpeed = 0;
+         gPad->feedback.Rumble.wRightMotorSpeed = 0;
+-        XInputSetState(portIndex, &gPad->feedback.Rumble);
+     }
+ }
+ 
+ void __cdecl GPad_UpdateAll()
+ {
+-    _XINPUT_STATE inputState; // [esp+0h] [ebp-14h] BYREF
+-    int portIndex; // [esp+10h] [ebp-4h]
+-
+-    if ( gpad_debug->current.integer >= 0 )
+-    {
+-        GPad_RefreshAll();
+-        for ( portIndex = 0; portIndex < 1; ++portIndex )
+-        {
+-            if ( !XInputGetState(portIndex, &inputState) )
+-            {
+-                GPad_UpdateSticks(portIndex, &inputState.Gamepad);
+-                GPad_UpdateDigitals(portIndex, &inputState.Gamepad);
+-                GPad_UpdateAnalogs(portIndex, &inputState.Gamepad);
+-            }
+-        }
+-        inputCounter = 0;
+-    }
+-    else
+-    {
+-        if ( !inputCounter )
+-        {
+-            for ( portIndex = 0; portIndex < 1; ++portIndex )
+-            {
+-                if ( hasInput[portIndex] )
+-                {
+-                    GPad_UpdateSticks(portIndex, &delayedInputState[portIndex].Gamepad);
+-                    GPad_UpdateDigitals(portIndex, &delayedInputState[portIndex].Gamepad);
+-                    GPad_UpdateAnalogs(portIndex, &delayedInputState[portIndex].Gamepad);
+-                }
+-            }
+-        }
+-        if ( --inputCounter <= gpad_debug->current.integer )
+-        {
+-            GPad_RefreshAll();
+-            for ( portIndex = 0; portIndex < 1; ++portIndex )
+-                hasInput[portIndex] = XInputGetState(portIndex, &delayedInputState[portIndex]) == 0;
+-            inputCounter = 0;
+-        }
+-    }
++    // The enhanced build has no controller input backend.
+ }
+ 
+ int GPad_RefreshAll()
+@@ -192,10 +150,7 @@
+     }
+     gPad = &s_gamePads[portIndex];
+     wasEnabled = gPad->enabled;
+-    if ( XInputGetCapabilities(portIndex, 1u, &gPad->caps) )
+-        gPad->enabled = 0;
+-    else
+-        gPad->enabled = 1;
++    gPad->enabled = false;
+     gPad->keyboardEnabled = 0;
+     if ( s_removedCB && wasEnabled && !gPad->enabled )
+     {
