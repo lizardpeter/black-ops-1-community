@@ -1,0 +1,384 @@
+--- a/src/bgame/bg_local.h
++++ b/src/bgame/bg_local.h
+@@ -533,7 +533,7 @@
+         int icon;
+         int use3D;
+         int color;
+-        const char *alt_3D_text;
++        unsigned int reservedAlt3DText;
+ };
+ 
+ struct playerState_s // sizeof=0x26A4
+--- a/src/sound/snd.h
++++ b/src/sound/snd.h
+@@ -495,7 +495,6 @@
+     unsigned int masterCount;
+     snd_master * masters;
+ };
+-static_assert(sizeof(SndDriverGlobals) == 52);
+ 
+ struct __declspec(align(4)) snd_enveffect // sizeof=0x20
+ {                                                                             // XREF: snd_local_t/r
+--- a/src/database/db_stream.h
++++ b/src/database/db_stream.h
+@@ -17,8 +17,9 @@
+ void __cdecl DB_IncStreamPos(int size);
+ const void **__cdecl DB_InsertPointer();
+ unsigned char *DB_GetNativeStreamSpan(int alignment, unsigned int size);
+-void DB_RecordRawFileAlias(const unsigned char *slot, RawFile *asset);
+-RawFile *DB_FindRawFileAlias(std::uint32_t encoded);
++void DB_RecordNativeAssetAlias(const unsigned char *slot, XAssetType type, void *asset);
++void *DB_FindNativeAssetAlias(std::uint32_t encoded, XAssetType type);
++const char *DB_ReadNativeAssetName(std::uint32_t encoded);
+ 
+ 
+ extern XBlock *g_streamBlocks;
+--- a/src/database/db_stream.cpp
++++ b/src/database/db_stream.cpp
+@@ -1,4 +1,6 @@
+ #include "db_stream.h"
++#include "db_stream_load.h"
++#include <cstring>
+ #include <cstdint>
+ #include <universal/assertive.h>
+ #include <enhanced/port/x64/fastfile_reference.h>
+@@ -16,7 +18,12 @@
+ 
+ namespace
+ {
+-std::unordered_map<const unsigned char *, RawFile *> rawFileAliases;
++struct AssetAlias
++{
++    XAssetType type;
++    void *asset;
++};
++std::unordered_map<const unsigned char *, AssetAlias> nativeAssetAliases;
+ }
+ 
+ unsigned char *DB_GetNativeStreamSpan(int alignment, unsigned int size)
+@@ -34,12 +41,12 @@
+     return data;
+ }
+ 
+-void DB_RecordRawFileAlias(const unsigned char *slot, RawFile *asset)
+-{
+-    rawFileAliases.insert_or_assign(slot, asset);
+-}
+-
+-RawFile *DB_FindRawFileAlias(std::uint32_t encoded)
++void DB_RecordNativeAssetAlias(const unsigned char *slot, XAssetType type, void *asset)
++{
++    nativeAssetAliases.insert_or_assign(slot, AssetAlias{type, asset});
++}
++
++void *DB_FindNativeAssetAlias(std::uint32_t encoded, XAssetType type)
+ {
+     const auto reference = bo1::DecodeFastfileReference(encoded);
+     if (reference.kind == bo1::ReferenceKind::blockOffset)
+@@ -47,20 +54,47 @@
+         const auto &block = g_streamBlocks[reference.block];
+         if (block.data && reference.offset < block.size)
+         {
+-            const auto entry = rawFileAliases.find(block.data + reference.offset);
+-            if (entry != rawFileAliases.end())
+-                return entry->second;
++            const auto entry = nativeAssetAliases.find(block.data + reference.offset);
++            if (entry != nativeAssetAliases.end() && entry->second.type == type)
++                return entry->second.asset;
+         }
+     }
+-    Com_Error(ERR_DROP, "Unresolved RawFile alias 0x%08x", encoded);
++    Com_Error(ERR_DROP, "Unresolved fastfile alias 0x%08x for asset type %d", encoded, type);
+     return nullptr;
+ }
+ 
++const char *DB_ReadNativeAssetName(std::uint32_t encoded)
++{
++    const auto name = bo1::DecodeFastfileReference(encoded);
++    if (name.kind == bo1::ReferenceKind::inlineData)
++    {
++        const auto *start = DB_GetNativeStreamSpan(0, 1);
++        auto *character = const_cast<unsigned char *>(start);
++        while (character)
++        {
++            Load_Stream(true, character, 1);
++            if (!*character)
++                return reinterpret_cast<const char *>(start);
++            character = DB_GetNativeStreamSpan(0, 1);
++        }
++        return nullptr;
++    }
++    if (name.kind == bo1::ReferenceKind::blockOffset)
++    {
++        const auto &block = g_streamBlocks[name.block];
++        if (block.data && name.offset < block.size &&
++            std::memchr(block.data + name.offset, 0, block.size - name.offset))
++            return reinterpret_cast<const char *>(block.data + name.offset);
++    }
++    Com_Error(ERR_DROP, "Invalid fastfile asset name reference 0x%08x", encoded);
++    return nullptr;
++}
++
+ void __cdecl DB_InitStreams(XBlock *blocks)
+ {
+     int i; // [esp+0h] [ebp-4h]
+ 
+-    rawFileAliases.clear();
++    nativeAssetAliases.clear();
+     g_streamBlocks = blocks;
+     g_streamPos = blocks->data;
+     g_streamPosIndex = 0;
+--- a/src/database/db_file_load.cpp
++++ b/src/database/db_file_load.cpp
+@@ -630,9 +630,9 @@
+         skipShaderCreationHack = i == skipLoadingMaterialsHack;
+         varXAsset = &asset;
+         Load_XAsset(false);
+-        if (asset.type == ASSET_TYPE_RAWFILE)
+-            DB_RecordRawFileAlias(serialized + sizeof(disk) * i + offsetof(FastfileAsset, header),
+-                                  asset.header.rawfile);
++        if (asset.type == ASSET_TYPE_RAWFILE || asset.type == ASSET_TYPE_SNDDRIVER_GLOBALS)
++            DB_RecordNativeAssetAlias(serialized + sizeof(disk) * i + offsetof(FastfileAsset, header),
++                                     asset.type, asset.header.data);
+         if (g_load.abort)
+             break;
+     }
+--- a/src/database/db_load.cpp
++++ b/src/database/db_load.cpp
+@@ -1192,79 +1192,127 @@
+     Load_Stream(atStreamStart, (unsigned __int8 *)varsnd_context, sizeof(snd_context) * count);
+ }
+ 
++namespace
++{
++struct DiskSoundArray
++{
++    std::uint32_t count;
++    std::uint32_t present;
++};
++
++template <typename T>
++T *LoadNativeSoundArray(DiskSoundArray disk)
++{
++    if (!disk.present || !disk.count)
++        return nullptr;
++    if (disk.count > INT32_MAX / sizeof(T))
++    {
++        Com_Error(ERR_DROP, "Invalid sound driver globals array size");
++        return nullptr;
++    }
++    const auto bytes = static_cast<int>(disk.count * sizeof(T));
++    auto *data = DB_GetNativeStreamSpan(3, bytes);
++    if (data)
++        Load_Stream(true, data, bytes);
++    return reinterpret_cast<T *>(data);
++}
++}
++
+ void __cdecl Load_SndDriverGlobals(bool atStreamStart)
+ {
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varSndDriverGlobals, 52);
+-    DB_PushStreamPos(4u);
+-    varXString = &varSndDriverGlobals->name;
+-    Load_XString(0);
+-    if ( varSndDriverGlobals->groups )
+-    {
+-        varSndDriverGlobals->groups = (snd_group *)AllocLoad_FxElemVisStateSample();
+-        varsnd_group = varSndDriverGlobals->groups;
+-        Load_snd_groupArray(1, varSndDriverGlobals->groupCount);
+-    }
+-    if ( varSndDriverGlobals->curves )
+-    {
+-        varSndDriverGlobals->curves = (snd_curve *)AllocLoad_FxElemVisStateSample();
+-        varsnd_curve = varSndDriverGlobals->curves;
+-        Load_snd_curveArray(1, varSndDriverGlobals->curveCount);
+-    }
+-    if ( varSndDriverGlobals->pans )
+-    {
+-        varSndDriverGlobals->pans = (snd_pan *)AllocLoad_FxElemVisStateSample();
+-        varsnd_pan = varSndDriverGlobals->pans;
+-        Load_snd_panArray(1, varSndDriverGlobals->panCount);
+-    }
+-    if ( varSndDriverGlobals->snapshotGroups )
+-    {
+-        varSndDriverGlobals->snapshotGroups = (snd_snapshot_group *)AllocLoad_FxElemVisStateSample();
+-        varsnd_snapshot_group = varSndDriverGlobals->snapshotGroups;
+-        Load_snd_snapshot_groupArray(1, varSndDriverGlobals->snapshotGroupCount);
+-    }
+-    if ( varSndDriverGlobals->contexts )
+-    {
+-        varSndDriverGlobals->contexts = (snd_context *)AllocLoad_FxElemVisStateSample();
+-        varsnd_context = varSndDriverGlobals->contexts;
+-        Load_snd_contextArray(1, varSndDriverGlobals->contextCount);
+-    }
+-    if ( varSndDriverGlobals->masters )
+-    {
+-        varSndDriverGlobals->masters = (snd_master *)AllocLoad_FxElemVisStateSample();
+-        varsnd_master = varSndDriverGlobals->masters;
+-        Load_snd_masterArray(1, varSndDriverGlobals->masterCount);
+-    }
++    if (!atStreamStart)
++    {
++        Com_Error(ERR_DROP, "Sound driver globals must be read from the fastfile stream");
++        return;
++    }
++    struct DiskSoundGlobals
++    {
++        std::uint32_t name;
++        DiskSoundArray groups, curves, pans, snapshotGroups, contexts, masters;
++    };
++    static_assert(sizeof(DiskSoundGlobals) == 52);
++    DiskSoundGlobals disk{};
++    auto *header = DB_GetNativeStreamSpan(3, sizeof(disk));
++    if (!header)
++        return;
++    Load_Stream(true, header, sizeof(disk));
++    std::memcpy(&disk, header, sizeof(disk));
++
++    DB_PushStreamPos(4);
++    auto &asset = *varSndDriverGlobals;
++    asset.name = DB_ReadNativeAssetName(disk.name);
++    asset.groups = LoadNativeSoundArray<snd_group>(disk.groups);
++    asset.groupCount = asset.groups ? disk.groups.count : 0;
++    asset.curves = LoadNativeSoundArray<snd_curve>(disk.curves);
++    asset.curveCount = asset.curves ? disk.curves.count : 0;
++    asset.pans = LoadNativeSoundArray<snd_pan>(disk.pans);
++    asset.panCount = asset.pans ? disk.pans.count : 0;
++    asset.snapshotGroups = LoadNativeSoundArray<snd_snapshot_group>(disk.snapshotGroups);
++    asset.snapshotGroupCount = asset.snapshotGroups ? disk.snapshotGroups.count : 0;
++    asset.contexts = LoadNativeSoundArray<snd_context>(disk.contexts);
++    asset.contextCount = asset.contexts ? disk.contexts.count : 0;
++    asset.masters = LoadNativeSoundArray<snd_master>(disk.masters);
++    asset.masterCount = asset.masters ? disk.masters.count : 0;
+     DB_PopStreamPos();
+ }
+ 
+ void __cdecl Load_SndDriverGlobalsPtr(bool atStreamStart)
+ {
+-    const void **inserted; // [esp+0h] [ebp-Ch]
+-    unsigned int value; // [esp+4h] [ebp-8h]
+-
+-    Load_Stream(atStreamStart, (unsigned __int8 *)varSndDriverGlobalsPtr, 4);
++    std::uint32_t encoded;
++    const unsigned char *sourceSlot = nullptr;
++    if (atStreamStart)
++    {
++        auto *slot = DB_GetNativeStreamSpan(3, sizeof(encoded));
++        if (!slot)
++            return;
++        Load_Stream(true, slot, sizeof(encoded));
++        std::memcpy(&encoded, slot, sizeof(encoded));
++        sourceSlot = slot;
++    }
++    else
++    {
++        encoded = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(*varSndDriverGlobalsPtr));
++    }
++
+     DB_PushStreamPos(0);
+-    if ( *varSndDriverGlobalsPtr )
+-    {
+-        value = (unsigned int)*varSndDriverGlobalsPtr;
+-        if ( *varSndDriverGlobalsPtr == (SndDriverGlobals *)-1 || value == -2 )
+-        {
+-            *varSndDriverGlobalsPtr = (SndDriverGlobals *)AllocLoad_FxElemVisStateSample();
+-            varSndDriverGlobals = *varSndDriverGlobalsPtr;
+-            if ( value == -2 )
+-                inserted = DB_InsertPointer();
+-            else
+-                inserted = 0;
+-            Load_SndDriverGlobals(1);
++    *varSndDriverGlobalsPtr = nullptr;
++    const auto reference = bo1::DecodeFastfileReference(encoded);
++    if (reference.kind == bo1::ReferenceKind::inlineData ||
++        reference.kind == bo1::ReferenceKind::inlineWithFixup)
++    {
++        const unsigned char *fixupSlot = nullptr;
++        if (reference.kind == bo1::ReferenceKind::inlineWithFixup)
++        {
++            DB_PushStreamPos(4);
++            fixupSlot = DB_GetNativeStreamSpan(3, sizeof(encoded));
++            if (fixupSlot)
++                DB_IncStreamPos(sizeof(encoded));
++            DB_PopStreamPos();
++            if (!fixupSlot)
++            {
++                DB_PopStreamPos();
++                return;
++            }
++        }
++        SndDriverGlobals loaded{};
++        varSndDriverGlobals = &loaded;
++        Load_SndDriverGlobals(true);
++        if (loaded.name)
++        {
++            *varSndDriverGlobalsPtr = &loaded;
+             Load_SndDriverGlobalsAsset(varSndDriverGlobalsPtr);
+-            if ( inserted )
+-                *inserted = *varSndDriverGlobalsPtr;
+-        }
+-        else
+-        {
+-            DB_ConvertOffsetToAlias((unsigned int *)varSndDriverGlobalsPtr);
+-        }
+-    }
++            if (fixupSlot)
++                DB_RecordNativeAssetAlias(fixupSlot, ASSET_TYPE_SNDDRIVER_GLOBALS, *varSndDriverGlobalsPtr);
++        }
++        varSndDriverGlobals = *varSndDriverGlobalsPtr;
++    }
++    else if (reference.kind != bo1::ReferenceKind::absent)
++    {
++        *varSndDriverGlobalsPtr = static_cast<SndDriverGlobals *>(
++            DB_FindNativeAssetAlias(encoded, ASSET_TYPE_SNDDRIVER_GLOBALS));
++    }
++    if (sourceSlot)
++        DB_RecordNativeAssetAlias(sourceSlot, ASSET_TYPE_SNDDRIVER_GLOBALS, *varSndDriverGlobalsPtr);
+     DB_PopStreamPos();
+ }
+ 
+@@ -7366,25 +7414,7 @@
+     }
+     varRawFile->len = disk.length;
+     DB_PushStreamPos(4);
+-    const auto name = bo1::DecodeFastfileReference(disk.name);
+-    if (name.kind == bo1::ReferenceKind::inlineData)
+-    {
+-        varRawFile->name = reinterpret_cast<const char *>(DB_GetNativeStreamSpan(0, 1));
+-        unsigned char *character;
+-        do
+-        {
+-            character = DB_GetNativeStreamSpan(0, 1);
+-            Load_Stream(true, character, 1);
+-        }
+-        while (*character);
+-    }
+-    else if (name.kind == bo1::ReferenceKind::blockOffset)
+-    {
+-        const auto &block = g_streamBlocks[name.block];
+-        if (block.data && name.offset < block.size &&
+-            std::memchr(block.data + name.offset, 0, block.size - name.offset))
+-            varRawFile->name = reinterpret_cast<const char *>(block.data + name.offset);
+-    }
++    varRawFile->name = DB_ReadNativeAssetName(disk.name);
+     if (!varRawFile->name)
+     {
+         Com_Error(ERR_DROP, "Invalid RawFile name reference");
+@@ -7439,14 +7469,14 @@
+         *varRawFilePtr = asset.rawfile;
+         varRawFile = asset.rawfile;
+         if (fixupSlot)
+-            DB_RecordRawFileAlias(fixupSlot, asset.rawfile);
++            DB_RecordNativeAssetAlias(fixupSlot, ASSET_TYPE_RAWFILE, asset.rawfile);
+     }
+     else if (reference.kind != bo1::ReferenceKind::absent)
+     {
+-        *varRawFilePtr = DB_FindRawFileAlias(encoded);
++        *varRawFilePtr = static_cast<RawFile *>(DB_FindNativeAssetAlias(encoded, ASSET_TYPE_RAWFILE));
+     }
+     if (sourceSlot)
+-        DB_RecordRawFileAlias(sourceSlot, *varRawFilePtr);
++        DB_RecordNativeAssetAlias(sourceSlot, ASSET_TYPE_RAWFILE, *varRawFilePtr);
+     DB_PopStreamPos();
+ }
+ 
