@@ -76,3 +76,21 @@ jobs:
               exit 1
             }
           }
+
+      - name: Record executable DLL imports
+        if: matrix.edition == 'enhanced'
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $dumpbin = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC\Tools\MSVC\**\bin\Hostx64\x86\dumpbin.exe' |
+            Select-Object -First 1
+          if (!$dumpbin) { throw 'dumpbin.exe missing' }
+          $configuration = '${{ matrix.configuration }}'
+          $imports = & $dumpbin /nologo /dependents "build/enhanced/$configuration/BlackOpsMP-Community.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $dlls = $imports | ForEach-Object { if ($_ -match '^\s+(\S+\.dll)\s*$') { $Matches[1] } }
+          if (!$dlls) { throw 'No DLL imports found' }
+          Write-Host "::notice title=Executable DLL imports::$($dlls -join ', ')"
+          "### DLL imports ($configuration)" >> $env:GITHUB_STEP_SUMMARY
+          '' >> $env:GITHUB_STEP_SUMMARY
+          $imports | ForEach-Object { "    $_" >> $env:GITHUB_STEP_SUMMARY }
