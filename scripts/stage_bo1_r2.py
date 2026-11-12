@@ -4,6 +4,7 @@ from contextlib import ExitStack
 from pathlib import Path, PurePosixPath
 import shutil
 import sys
+import time
 from urllib.parse import quote
 import zipfile
 
@@ -41,19 +42,26 @@ def main():
     parser.add_argument("--destination", type=Path, required=True)
     args = parser.parse_args()
     sys.path.insert(0, str(args.runners / "scripts"))
-    import bo1_full_game_range as remote_zip
     from bo1_full_game_range import BO1_ZIP_KEY, EXPECTED_SIZE, HttpRangeObject, R2_BASES
     from r2_download import download
 
-    # Large retail members benefit from fewer R2 requests while retaining bounded reads.
-    remote_zip.BLOCK_SIZE = 16 * 1024**2
-    remote_zip.CACHE_BLOCKS = 4
+    class RetryingRangeObject(HttpRangeObject):
+        def _block(self, index):
+            for attempt in range(3):
+                try:
+                    return super()._block(index)
+                except OSError as error:
+                    if attempt == 2:
+                        raise
+                    print(f"Retrying R2 block {index}: {error}", flush=True)
+                    time.sleep(2 ** attempt)
+
     args.destination.mkdir(parents=True, exist_ok=True)
     with ExitStack() as cleanup:
         archive = None
         for base in R2_BASES:
             try:
-                source = cleanup.enter_context(HttpRangeObject(base + quote(BO1_ZIP_KEY, safe="/"), EXPECTED_SIZE))
+                source = cleanup.enter_context(RetryingRangeObject(base + quote(BO1_ZIP_KEY, safe="/"), EXPECTED_SIZE))
                 archive = cleanup.enter_context(zipfile.ZipFile(source))
                 break
             except (OSError, RuntimeError, zipfile.BadZipFile) as error:

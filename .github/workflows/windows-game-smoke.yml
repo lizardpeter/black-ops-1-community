@@ -72,7 +72,14 @@ jobs:
       - name: Stage BO1 retail assets using the R2 runner
         shell: pwsh
         run: |
-          python scripts/stage_bo1_r2.py --runners r2-runners --destination "$env:RUNNER_TEMP/bo1-game"
+          $stageLog = Join-Path $env:RUNNER_TEMP 'bo1-stage.log'
+          python -u scripts/stage_bo1_r2.py --runners r2-runners --destination "$env:RUNNER_TEMP/bo1-game" 2>&1 |
+            Tee-Object -FilePath $stageLog
+          if ($LASTEXITCODE -ne 0) {
+            $failure = (Get-Content $stageLog -Tail 4) -join ' | '
+            Write-Host "::error title=BO1 R2 staging failed::$failure"
+            exit 1
+          }
 
       - name: Boot the game and verify a local multiplayer frame
         shell: pwsh
